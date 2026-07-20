@@ -5,11 +5,12 @@ import { PositionStore } from "./state/positionStore.js";
 import { TradeLog } from "./state/tradeLog.js";
 import { WhaleTracker } from "./whales/whaleTracker.js";
 import { WhaleList } from "./whales/whaleList.js";
-import { upsertWhaleWebhook } from "./whales/heliusWebhook.js";
+import { SolanaWhalePoller } from "./whales/solanaWhalePoller.js";
 import { TradingOrchestrator } from "./pipeline/orchestrator.js";
 import { createServer } from "./server/webhookServer.js";
 import { getWalletKeypair, getSolBalance } from "./execution/wallet.js";
 import { TelegramNotifier } from "./notify/telegram.js";
+import { marketContext } from "./data/marketContext.js";
 
 const log = childLogger("bootstrap");
 
@@ -45,17 +46,17 @@ async function main(): Promise<void> {
   const whaleTracker = new WhaleTracker();
   const whaleList = new WhaleList();
   const savedWhales = await whaleList.load();
+
+  const whalePoller = new SolanaWhalePoller(whaleTracker, () => marketContext.getSolPriceUsd());
+
   if (savedWhales.length > 0) {
     whaleTracker.setWatchlist(whaleList.addresses());
-    log.info({ count: savedWhales.length }, "loaded whale watchlist from disk");
-
-    if (env.HELIUS_WEBHOOK_URL && env.HELIUS_API_KEY) {
-      try {
-        await upsertWhaleWebhook(whaleList.addresses());
-      } catch (err) {
-        log.error({ err: (err as Error).message }, "failed to register Helius webhook");
-      }
-    }
+    whalePoller.setWatchlist(whaleList.addresses());
+    whalePoller.start();
+    log.info(
+      { count: savedWhales.length },
+      "loaded whale watchlist from disk, polling via free public Solana RPC (see README free-tier tradeoffs)",
+    );
   } else {
     log.warn(
       "No whale watchlist found at data/whale-watchlist.json — whale activity will be empty until one is seeded. " +
@@ -66,7 +67,7 @@ async function main(): Promise<void> {
   const telegram = new TelegramNotifier();
   await telegram.notifyStartup(env.LIVE_TRADING ? "live" : "paper");
 
-  const app = createServer({ whaleTracker, portfolio, positionStore, tradeLog });
+  const app = createServer({ portfolio, positionStore, tradeLog });
   app.listen(env.PORT, () => log.info({ port: env.PORT }, "webhook/status server listening"));
 
   const orchestrator = new TradingOrchestrator({ portfolio, positionStore, whaleTracker, tradeLog, telegram });
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
   const shutdown = () => {
     log.info("shutting down");
     orchestrator.stop();
+    whalePoller.stop();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

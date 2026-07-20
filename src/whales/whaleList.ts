@@ -15,8 +15,8 @@ const WATCHLIST_PATH = path.join(DATA_DIR, "whale-watchlist.json");
  * single authoritative "top whale" API, so the list is a curated set of
  * wallet addresses (seeded manually or via `discoverFromTrendingTokens`,
  * which pulls large holders across currently-trending tokens as a proxy)
- * persisted to disk so the Helius webhook registration is stable across
- * restarts.
+ * persisted to disk so the watchlist (and SolanaWhalePoller's per-wallet
+ * poll state) is stable across restarts.
  */
 export class WhaleList {
   private wallets: WhaleWallet[] = [];

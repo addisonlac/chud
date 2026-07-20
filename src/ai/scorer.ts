@@ -1,15 +1,15 @@
 import { env } from "../config/env.js";
 import { childLogger } from "../utils/logger.js";
-import { getAnthropicClient } from "./anthropicClient.js";
+import { callGroqTool, type GroqToolDef } from "./groqClient.js";
 import type { ScoringPayload, ScoringResponse } from "../types/index.js";
 
 const log = childLogger("scorer");
 
-const SCORE_TOOL = {
+const SCORE_TOOL: GroqToolDef = {
   name: "score_trade",
   description: "Score a proposed SOL memecoin trade based on the supplied market, sentiment, and whale data.",
-  input_schema: {
-    type: "object" as const,
+  parameters: {
+    type: "object",
     properties: {
       confidence: {
         type: "number",
@@ -40,46 +40,37 @@ a REAL automated buy, so do not inflate scores — your calibration is tracked a
 outcomes over time. Always respond by calling the score_trade tool.`;
 
 /**
- * Strategy rule #6-7: merges all pipeline data into one payload and asks
- * Claude Opus to score the trade. The caller (risk manager / orchestrator)
- * is responsible for gating execution on confidence > threshold — this
- * function only returns the model's assessment.
+ * Strategy rule #6-7: merges all pipeline data into one payload and asks a
+ * free-tier Groq-hosted model to score the trade. The caller (risk manager
+ * / orchestrator) is responsible for gating execution on confidence >
+ * threshold — this function only returns the model's assessment.
+ *
+ * Note: this is a materially weaker model than Claude Opus for this kind
+ * of nuanced, multi-factor judgment call — that's the real tradeoff of
+ * not paying for Anthropic, not just a vendor swap. Watch /stats (Brier
+ * score, calibration buckets) closely before trusting it with any size.
  */
 export async function scoreTrade(payload: ScoringPayload): Promise<ScoringResponse> {
-  const client = getAnthropicClient();
-
-  const response = await client.messages.create({
+  const result = await callGroqTool<ScoringResponse>({
     model: env.SCORING_MODEL,
-    max_tokens: 1024,
-    system: SYSTEM_PROMPT,
-    tools: [SCORE_TOOL],
-    tool_choice: { type: "tool", name: "score_trade" },
-    messages: [
-      {
-        role: "user",
-        content: `Merged trade payload:\n\n${JSON.stringify(payload, null, 2)}`,
-      },
-    ],
+    systemPrompt: SYSTEM_PROMPT,
+    userMessage: `Merged trade payload:\n\n${JSON.stringify(payload, null, 2)}`,
+    tool: SCORE_TOOL,
+    maxTokens: 1024,
   });
 
-  const toolUse = response.content.find((block) => block.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") {
-    throw new Error("Scoring model did not return a tool_use block");
-  }
-
-  const input = toolUse.input as ScoringResponse;
-  const confidence = clamp(input.confidence, 0, 1);
+  const confidence = clamp(result.confidence, 0, 1);
 
   log.info(
-    { mint: payload.token.mint, symbol: payload.token.symbol, confidence, direction: input.direction },
+    { mint: payload.token.mint, symbol: payload.token.symbol, confidence, direction: result.direction },
     "trade scored",
   );
 
   return {
     confidence,
-    direction: input.direction,
-    reasoning: input.reasoning,
-    riskFlags: input.riskFlags ?? [],
+    direction: result.direction,
+    reasoning: result.reasoning,
+    riskFlags: result.riskFlags ?? [],
   };
 }
 

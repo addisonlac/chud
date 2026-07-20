@@ -1,7 +1,7 @@
 {
   "name": "sol-memecoin-quant-bot",
   "version": "0.1.0",
-  "description": "Autonomous SOL memecoin trading bot: Pump.fun scanning, Birdeye candles, news sentiment, whale tracking, Claude-scored signals, Jupiter execution.",
+  "description": "Autonomous SOL memecoin trading bot: Pump.fun scanning, Birdeye candles, news sentiment, whale tracking, Groq-scored signals, Jupiter execution.",
   "type": "module",
   "private": true,
   "engines": {
@@ -16,7 +16,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
     "@solana/web3.js": "^1.95.4",
     "bs58": "^6.0.0",
     "dotenv": "^16.4.5",

@@ -1,9 +1,10 @@
 /**
  * Bounds how many token evaluations run concurrently. The scanner can emit
- * new tokens far faster than the Birdeye/News/Anthropic/Jupiter calls in
- * the evaluation pipeline can complete, so without this an API-rate-limit
- * pile-up (and ballooning AI spend) would be the very first thing that
- * happens under real load.
+ * new tokens far faster than the Birdeye/News/Groq/Jupiter calls in the
+ * evaluation pipeline can complete, so without this an API-rate-limit
+ * pile-up would be the very first thing that happens under real load —
+ * Groq's free tier especially, which caps requests more tightly than a
+ * paid Anthropic account would.
  */
 export class Semaphore {
   private active = 0;

@@ -14,9 +14,13 @@ const numFromString = (fallback: number) =>
     .transform((v) => (v === undefined || v === "" ? fallback : Number(v)));
 
 const envSchema = z.object({
-  ANTHROPIC_API_KEY: z.string().optional().default(""),
-  SENTIMENT_MODEL: z.string().default("claude-sonnet-5"),
-  SCORING_MODEL: z.string().default("claude-opus-4-8"),
+  // Groq's OpenAI-compatible API, free tier — no payment method required.
+  // Model IDs rotate over time; check console.groq.com/docs/models if
+  // these defaults 404.
+  GROQ_API_KEY: z.string().optional().default(""),
+  GROQ_BASE_URL: z.string().default("https://api.groq.com/openai/v1"),
+  SENTIMENT_MODEL: z.string().default("llama-3.1-8b-instant"),
+  SCORING_MODEL: z.string().default("llama-3.3-70b-versatile"),
 
   BIRDEYE_API_KEY: z.string().optional().default(""),
   BIRDEYE_BASE_URL: z.string().default("https://public-api.birdeye.so"),
@@ -24,10 +28,10 @@ const envSchema = z.object({
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api.pump.fun"),
   PUMPFUN_SCAN_INTERVAL_MS: numFromString(200),
 
-  HELIUS_API_KEY: z.string().optional().default(""),
-  HELIUS_RPC_URL: z.string().default("https://mainnet.helius-rpc.com"),
-  HELIUS_WEBHOOK_SECRET: z.string().optional().default(""),
-  HELIUS_WEBHOOK_URL: z.string().optional().default(""),
+  // Whale wallet tracking polls the free public Solana RPC (SOLANA_RPC_URL
+  // below) instead of Helius webhooks. WHALE_POLL_INTERVAL_MS is
+  // deliberately conservative — the public endpoint is shared/rate-limited.
+  WHALE_POLL_INTERVAL_MS: numFromString(60_000),
 
   NEWSAPI_KEY: z.string().optional().default(""),
   NEWSAPI_BASE_URL: z.string().default("https://newsapi.org/v2"),
@@ -80,9 +84,8 @@ export type Env = typeof env;
 export function assertRequiredConfig(): string[] {
   const missing: string[] = [];
 
-  if (!env.ANTHROPIC_API_KEY) missing.push("ANTHROPIC_API_KEY");
+  if (!env.GROQ_API_KEY) missing.push("GROQ_API_KEY");
   if (!env.BIRDEYE_API_KEY) missing.push("BIRDEYE_API_KEY");
-  if (!env.HELIUS_API_KEY) missing.push("HELIUS_API_KEY");
   if (!env.NEWSAPI_KEY) missing.push("NEWSAPI_KEY");
 
   if (env.LIVE_TRADING && !env.WALLET_PRIVATE_KEY) {

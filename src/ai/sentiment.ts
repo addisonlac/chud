@@ -1,15 +1,15 @@
 import { env } from "../config/env.js";
 import { childLogger } from "../utils/logger.js";
-import { getAnthropicClient } from "./anthropicClient.js";
+import { callGroqTool, type GroqToolDef } from "./groqClient.js";
 import type { NewsItem, SentimentResult } from "../types/index.js";
 
 const log = childLogger("sentiment");
 
-const SENTIMENT_TOOL = {
+const SENTIMENT_TOOL: GroqToolDef = {
   name: "report_sentiment",
   description: "Report the aggregate market sentiment derived from the supplied news articles.",
-  input_schema: {
-    type: "object" as const,
+  parameters: {
+    type: "object",
     properties: {
       score: {
         type: "number",
@@ -24,8 +24,8 @@ const SENTIMENT_TOOL = {
 
 /**
  * Strategy rule #4 (AI half): runs sentiment analysis over recent crypto
- * news with Claude Sonnet. Tool-use forces structured output instead of
- * parsing free text.
+ * news with a free-tier Groq-hosted model. Forced tool-calling gets
+ * structured output instead of parsing free text.
  */
 export async function analyzeSentiment(
   news: NewsItem[],
@@ -45,32 +45,18 @@ export async function analyzeSentiment(
     : "Assess the general crypto/Solana market mood.";
 
   try {
-    const client = getAnthropicClient();
-    const response = await client.messages.create({
+    const result = await callGroqTool<{ score: number; label: SentimentResult["label"]; summary: string }>({
       model: env.SENTIMENT_MODEL,
-      max_tokens: 512,
-      tools: [SENTIMENT_TOOL],
-      tool_choice: { type: "tool", name: "report_sentiment" },
-      messages: [
-        {
-          role: "user",
-          content:
-            `${focus}\n\nRecent crypto news headlines:\n${articleList}\n\n` +
-            "Call report_sentiment with your assessment.",
-        },
-      ],
+      userMessage:
+        `${focus}\n\nRecent crypto news headlines:\n${articleList}\n\n` +
+        "Call report_sentiment with your assessment.",
+      tool: SENTIMENT_TOOL,
     });
 
-    const toolUse = response.content.find((block) => block.type === "tool_use");
-    if (!toolUse || toolUse.type !== "tool_use") {
-      throw new Error("Sentiment model did not return a tool_use block");
-    }
-
-    const input = toolUse.input as { score: number; label: SentimentResult["label"]; summary: string };
     return {
-      score: clamp(input.score, -1, 1),
-      label: input.label,
-      summary: input.summary,
+      score: clamp(result.score, -1, 1),
+      label: result.label,
+      summary: result.summary,
       basedOnArticles: news.length,
     };
   } catch (err) {

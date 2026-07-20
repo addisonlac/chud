@@ -2,8 +2,13 @@
 
 Autonomous trading bot for Solana pump.fun memecoins: scans for new tokens,
 enriches them with market data, news sentiment, and whale activity, scores
-the trade with Claude, and (optionally) auto-executes via Jupiter under a
-fixed set of risk rules.
+the trade with a free-tier Groq-hosted LLM, and (optionally) auto-executes
+via Jupiter under a fixed set of risk rules.
+
+> **Runs entirely on free-tier services.** Groq (AI scoring/sentiment) and
+> the public Solana RPC (whale tracking) require no payment method. See
+> [Free-tier tradeoffs](#free-tier-tradeoffs) for what that costs you in
+> quality/reliability versus the paid alternatives (Anthropic, Helius).
 
 > ⚠️ **This trades real money if you turn it on.** Memecoin trading is
 > extremely high risk — most pump.fun tokens go to zero. Read the
@@ -20,12 +25,12 @@ fixed set of risk rules.
    candle/news/AI budget on it.
 4. **Market data** — pull 5m / 1h / 1d candles from Birdeye.
 5. **Sentiment** — pull recent crypto news and run sentiment analysis with
-   Claude Sonnet.
-6. **Whale tracking** — track the top 50 watched wallets via Helius
-   webhooks in real time (buys/sells, net flow, per token).
+   a free-tier Groq-hosted model (default: Llama 3.1 8B).
+6. **Whale tracking** — track the top 50 watched wallets by polling the
+   free public Solana RPC (buys/sells, net flow, per token).
 7. **Scoring** — merge token + security + candles + sentiment + whale
-   activity + portfolio state into one payload and score it with Claude
-   Opus.
+   activity + portfolio state into one payload and score it with a
+   free-tier Groq-hosted model (default: Llama 3.3 70B).
 8. **Execute** — if confidence > 72%, generate a signal and auto-execute a
    buy via Jupiter, sized by the risk manager.
 
@@ -83,6 +88,36 @@ To go live:
 There is no undo on a live signed transaction. Treat the private key like
 what it is — direct, irreversible access to the funds.
 
+## Free-tier tradeoffs
+
+This runs entirely on services with no payment method required — useful if
+you don't want to put a card on file, but it's a real trade against
+quality and reliability, not a free lunch:
+
+- **AI scoring/sentiment (Groq instead of Anthropic).** The architecture
+  is unchanged (an LLM scores every trade via forced tool-calling), but
+  the model behind it is a much smaller open-weight model than Claude
+  Opus/Sonnet. For a nuanced, multi-factor judgment call like "should I
+  buy this memecoin," that's a meaningful capability gap, not a rounding
+  error — treat the AI confidence score with *more* skepticism than
+  before, not less, until `/stats` shows real calibration data. Groq's
+  free tier also has request-rate caps; if you see frequent scoring
+  failures in the logs, you're likely hitting them.
+- **Whale tracking (public Solana RPC polling instead of Helius
+  webhooks).** Helius pushed whale transactions to this bot in real time.
+  Polling the free public RPC (default every 60s, see
+  `WHALE_POLL_INTERVAL_MS`) means whale activity data lags by up to that
+  interval, and the public endpoint is shared across everyone using it —
+  under load it will silently drop or delay data rather than erroring
+  loudly. See [Whale tracking](#whale-tracking-free-public-solana-rpc)
+  below for the full tradeoff.
+
+If either of these becomes the bottleneck once you have real `/stats`
+data, the fix is a config change, not a rewrite: point `SOLANA_RPC_URL` at
+a paid RPC provider for faster/more reliable whale data, or swap
+`GROQ_BASE_URL`/model names for a stronger paid provider once you've
+decided the strategy is worth paying for.
+
 ## Win/loss ledger + AI confidence calibration
 
 Every closed position (win or loss) is appended to a persisted ledger
@@ -122,12 +157,12 @@ src/
   safety/rugCheck.ts        hard pre-trade rug/safety gate (rule #3)
   news/newsApi.ts            NewsAPI client
   ai/
-    anthropicClient.ts         shared Anthropic SDK client
-    sentiment.ts                 Claude Sonnet news sentiment
-    scorer.ts                     Claude Opus trade scoring
+    groqClient.ts               shared Groq (OpenAI-compatible) tool-calling helper
+    sentiment.ts                 free-tier LLM news sentiment
+    scorer.ts                     free-tier LLM trade scoring
   whales/
     whaleList.ts                top-50 whale wallet watchlist (persisted)
-    heliusWebhook.ts              Helius webhook registration + payload types
+    solanaWhalePoller.ts          polls free public Solana RPC per watched wallet
     whaleTracker.ts                 rolling per-mint whale buy/sell activity
   risk/riskManager.ts            position sizing, fixed + trailing stop, max-age exit
   notify/telegram.ts             read-only trade notifications (opened/closed/errors)
@@ -139,7 +174,7 @@ src/
     positionStore.ts                open/closed positions + trailing peak, persisted to disk
     tradeLog.ts                      win/loss ledger + Brier score / calibration stats
   pipeline/orchestrator.ts       wires scan -> filter -> safety -> enrich -> score -> execute
-  server/webhookServer.ts       Express app: Helius webhook + /status + /positions + /stats + /trades
+  server/webhookServer.ts       Express app: /status + /positions + /stats + /trades
   index.ts                     entrypoint
 ```
 
@@ -149,9 +184,9 @@ src/
 PumpFunScanner (200ms poll)
   -> passesMarketCapFilter (>$50k)
   -> [Birdeye overview + token_security] -> assessTokenSafety (hard gate, fails closed)
-  -> [Birdeye candles] + [NewsAPI -> Sentiment(Sonnet)] + [WhaleTracker activity]
+  -> [Birdeye candles] + [NewsAPI -> Sentiment(Groq)] + [WhaleTracker activity]
   -> merged ScoringPayload (incl. security snapshot)
-  -> scoreTrade (Opus) -> confidence, direction
+  -> scoreTrade (Groq) -> confidence, direction
   -> if confidence > 72% && direction == long:
        -> sizePosition (risk manager)
        -> executeBuy (Jupiter, paper|live)
@@ -169,28 +204,30 @@ Position monitor (every 30s, independent loop):
 
 Concurrency is capped at 3 simultaneous token evaluations
 (`src/utils/semaphore.ts`) so the 200ms scan loop can't fan out into an
-unbounded number of paid Birdeye/NewsAPI/Anthropic calls.
+unbounded number of Birdeye/NewsAPI/Groq calls — this matters even more
+on Groq's free tier, which has meaningfully tighter rate limits than a
+paid Anthropic account would.
 
 ## Setup
 
 ```bash
 npm install
 cp .env.example .env
-# fill in ANTHROPIC_API_KEY, BIRDEYE_API_KEY, HELIUS_API_KEY, NEWSAPI_KEY at minimum
+# fill in GROQ_API_KEY, BIRDEYE_API_KEY, NEWSAPI_KEY at minimum
 npm run dev
 ```
 
 Required accounts/keys:
 
-| Service   | Used for                              | Get a key at                          |
-|-----------|----------------------------------------|----------------------------------------|
-| Anthropic | Sentiment (Sonnet) + scoring (Opus)    | console.anthropic.com                  |
-| Birdeye   | Candles, token overview, top holders   | birdeye.so/find-more (API plans)       |
-| Helius    | RPC + whale-wallet webhooks            | helius.dev                             |
-| NewsAPI   | Crypto news headlines                  | newsapi.org                            |
-| Jupiter   | Swap execution                         | no key required (public v6 API)        |
+| Service | Used for                                   | Get a key at                     | Payment method required? |
+|---------|----------------------------------------------|-----------------------------------|---------------------------|
+| Groq    | Sentiment + trade scoring (free-tier LLM)     | console.groq.com                  | No                        |
+| Birdeye | Candles, token overview, token security, top holders | birdeye.so/find-more (API plans) | Depends on plan/volume |
+| NewsAPI | Crypto news headlines                         | newsapi.org                       | No (free tier)            |
+| Jupiter | Swap execution                                | no key required (public v6 API)   | No                        |
+| Solana RPC | Whale wallet polling, wallet balance, tx submission | none — public endpoint by default | No                    |
 
-### Seeding the whale watchlist
+### Whale tracking (free public Solana RPC)
 
 Rule #5 needs a list of wallet addresses to watch. There's no single
 authoritative "top 50 whale" API, so seed `data/whale-watchlist.json`
@@ -204,12 +241,20 @@ yourself, e.g.:
 
 or call `WhaleList.discoverFromTrendingTokens([...mints])` (see
 `src/whales/whaleList.ts`) to seed it from large holders of currently
-trending tokens as a starting point, then curate by hand. On startup, if a
-watchlist exists and `HELIUS_WEBHOOK_URL` + `HELIUS_API_KEY` are set, the
-bot registers/updates a Helius enhanced webhook covering those addresses.
-`HELIUS_WEBHOOK_URL` must be a publicly reachable URL pointing at this
-service's `/webhooks/helius` endpoint (e.g. via a reverse proxy or tunnel
-in local dev).
+trending tokens as a starting point, then curate by hand.
+
+On startup, if a watchlist exists, `SolanaWhalePoller`
+(`src/whales/solanaWhalePoller.ts`) starts polling `SOLANA_RPC_URL` for
+each watched wallet — no webhook registration, no public URL needed. It
+diffs each wallet's SPL token balances before/after each new transaction
+to infer buy/sell direction and size, staggering requests across
+`WHALE_POLL_INTERVAL_MS` (default 60s) to stay under the free public
+endpoint's rate limits. This is meaningfully slower and less reliable than
+Helius's real-time pre-parsed webhook events were — see
+[Free-tier tradeoffs](#free-tier-tradeoffs). If you already have (or later
+get) a paid RPC endpoint (Helius, Triton, etc.), just point
+`SOLANA_RPC_URL` at it — no code changes needed, and polling will
+naturally get faster/more reliable since the rate limits ease up.
 
 ### Connecting Telegram notifications
 
@@ -271,22 +316,29 @@ Endpoints exposed on `PORT` (default 3000):
 - `GET /stats` — win rate, expectancy, Brier score, confidence calibration
   buckets (see [Win/loss ledger](#winloss-ledger--ai-confidence-calibration))
 - `GET /trades` — raw closed-trade ledger entries
-- `POST /webhooks/helius` — Helius whale-wallet webhook receiver (requires
-  `Authorization: <HELIUS_WEBHOOK_SECRET>` header)
 
 ## Known limitations / next steps
 
-- The pump.fun, Birdeye `token_security`, and Helius webhook payload shapes
-  here follow their documented/observed conventions as of this writing;
-  verify against a live payload before trusting them in production, since
-  all are subject to change without notice.
+- The pump.fun and Birdeye `token_security` payload shapes here follow
+  their documented/observed conventions as of this writing; verify against
+  a live payload before trusting them in production, since both are
+  subject to change without notice.
+- Groq's free-tier models are a real capability gap versus Claude
+  Opus/Sonnet for this kind of judgment call, and the free tier has
+  request-rate caps that a paid Anthropic account wouldn't. See
+  [Free-tier tradeoffs](#free-tier-tradeoffs).
+- Whale tracking polls the free public Solana RPC instead of receiving
+  real-time Helius webhooks, so activity data lags by up to
+  `WHALE_POLL_INTERVAL_MS` and can be unreliable under the shared
+  endpoint's rate limits. Its balance-diff parsing
+  (`solanaWhalePoller.ts`) is also a heuristic — it picks the
+  largest-magnitude token balance change per transaction, which can
+  misread complex multi-hop swap routes.
 - The rug/safety gate catches the *mechanical* rug vectors (un-revoked
   authorities, holder concentration, thin liquidity, Token-2022 transfer
   fees). It does not catch every scam — a token can pass every check here
   and still be a bad trade for reasons the AI scorer (or nothing) catches.
   Treat it as a floor, not a guarantee.
-- `WhaleTracker`'s USD estimate for whale trades is derived from the SOL
-  leg of the swap × cached SOL price — approximate, not exchange-exact.
 - No backtesting harness is included; `/stats` gives you real calibration
   data once you've paper-traded long enough to accumulate closed trades
   (30+ recommended), but there's no way to evaluate the strategy against
