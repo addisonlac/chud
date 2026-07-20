@@ -1,0 +1,79 @@
+import { env, assertRequiredConfig } from "./config/env.js";
+import { childLogger } from "./utils/logger.js";
+import { Portfolio } from "./state/portfolio.js";
+import { PositionStore } from "./state/positionStore.js";
+import { WhaleTracker } from "./whales/whaleTracker.js";
+import { WhaleList } from "./whales/whaleList.js";
+import { upsertWhaleWebhook } from "./whales/heliusWebhook.js";
+import { TradingOrchestrator } from "./pipeline/orchestrator.js";
+import { createServer } from "./server/webhookServer.js";
+import { getWalletKeypair, getSolBalance } from "./execution/wallet.js";
+
+const log = childLogger("bootstrap");
+
+async function main(): Promise<void> {
+  const missing = assertRequiredConfig();
+  if (missing.length > 0) {
+    log.warn({ missing }, "missing configuration — affected features will no-op or error until set");
+  }
+
+  if (env.LIVE_TRADING) {
+    log.warn("LIVE_TRADING=true — this process WILL sign and submit real Jupiter swaps with real funds.");
+  } else {
+    log.info("Running in PAPER mode — no real trades will be signed or submitted.");
+  }
+
+  const positionStore = new PositionStore();
+  await positionStore.load();
+
+  const portfolio = new Portfolio();
+  if (env.LIVE_TRADING) {
+    const keypair = getWalletKeypair();
+    if (!keypair) {
+      throw new Error("LIVE_TRADING=true but WALLET_PRIVATE_KEY is missing/invalid");
+    }
+    const balance = await getSolBalance(keypair.publicKey);
+    portfolio.setSolBalance(balance);
+    log.info({ publicKey: keypair.publicKey.toBase58(), balance }, "synced live wallet balance");
+  }
+
+  const whaleTracker = new WhaleTracker();
+  const whaleList = new WhaleList();
+  const savedWhales = await whaleList.load();
+  if (savedWhales.length > 0) {
+    whaleTracker.setWatchlist(whaleList.addresses());
+    log.info({ count: savedWhales.length }, "loaded whale watchlist from disk");
+
+    if (env.HELIUS_WEBHOOK_URL && env.HELIUS_API_KEY) {
+      try {
+        await upsertWhaleWebhook(whaleList.addresses());
+      } catch (err) {
+        log.error({ err: (err as Error).message }, "failed to register Helius webhook");
+      }
+    }
+  } else {
+    log.warn(
+      "No whale watchlist found at data/whale-watchlist.json — whale activity will be empty until one is seeded. " +
+        "See README for how to populate it.",
+    );
+  }
+
+  const app = createServer({ whaleTracker, portfolio, positionStore });
+  app.listen(env.PORT, () => log.info({ port: env.PORT }, "webhook/status server listening"));
+
+  const orchestrator = new TradingOrchestrator({ portfolio, positionStore, whaleTracker });
+  orchestrator.start();
+
+  const shutdown = () => {
+    log.info("shutting down");
+    orchestrator.stop();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+main().catch((err) => {
+  log.error({ err: (err as Error).stack ?? (err as Error).message }, "fatal startup error");
+  process.exit(1);
+});
