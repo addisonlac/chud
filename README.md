@@ -12,7 +12,7 @@ fixed set of risk rules.
 
 ## Strategy
 
-1. **Scan** — poll pump.fun for newly created tokens every 500ms.
+1. **Scan** — poll pump.fun for newly created tokens every 200ms.
 2. **Filter** — only tokens with market cap > $50k move forward.
 3. **Rug/safety gate** — reject anything with an un-revoked mint/freeze
    authority, excessive holder/creator concentration, a Token-2022
@@ -114,7 +114,7 @@ src/
   config/env.ts          env var loading + validation (zod)
   types/index.ts          shared types across the pipeline
   scanners/
-    pumpfun.ts             500ms poller for new pump.fun tokens
+    pumpfun.ts             200ms poller for new pump.fun tokens
     filters.ts              market-cap filter (rule #2)
   data/
     birdeye.ts               candles (5m/1h/1d), token overview, top holders, token security
@@ -146,7 +146,7 @@ src/
 ### Data flow
 
 ```
-PumpFunScanner (500ms poll)
+PumpFunScanner (200ms poll)
   -> passesMarketCapFilter (>$50k)
   -> [Birdeye overview + token_security] -> assessTokenSafety (hard gate, fails closed)
   -> [Birdeye candles] + [NewsAPI -> Sentiment(Sonnet)] + [WhaleTracker activity]
@@ -168,7 +168,7 @@ Position monitor (every 30s, independent loop):
 ```
 
 Concurrency is capped at 3 simultaneous token evaluations
-(`src/utils/semaphore.ts`) so the 500ms scan loop can't fan out into an
+(`src/utils/semaphore.ts`) so the 200ms scan loop can't fan out into an
 unbounded number of paid Birdeye/NewsAPI/Anthropic calls.
 
 ## Setup

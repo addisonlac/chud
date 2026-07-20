@@ -11,7 +11,7 @@ const NEWS_TTL_MS = 5 * 60_000;
 
 /**
  * Caches the two pieces of context that are expensive/rate-limited but
- * change slowly relative to the 500ms scan loop: SOL/USD price and the
+ * change slowly relative to the 200ms scan loop: SOL/USD price and the
  * broad crypto news feed. Every evaluated token reads from this cache
  * instead of re-fetching per-mint.
  */

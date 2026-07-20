@@ -22,7 +22,7 @@ interface FetchJsonOptions extends RequestInit {
 /**
  * fetch() wrapper with a timeout and bounded retries on 429/5xx/network
  * errors. External market-data and news APIs flake constantly under a
- * 500ms polling loop, so callers get resilience for free instead of each
+ * 200ms polling loop, so callers get resilience for free instead of each
  * client re-implementing it.
  */
 export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}): Promise<T> {

@@ -22,7 +22,7 @@ const envSchema = z.object({
   BIRDEYE_BASE_URL: z.string().default("https://public-api.birdeye.so"),
 
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api.pump.fun"),
-  PUMPFUN_SCAN_INTERVAL_MS: numFromString(500),
+  PUMPFUN_SCAN_INTERVAL_MS: numFromString(200),
 
   HELIUS_API_KEY: z.string().optional().default(""),
   HELIUS_RPC_URL: z.string().default("https://mainnet.helius-rpc.com"),
