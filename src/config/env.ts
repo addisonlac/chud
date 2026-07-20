@@ -1,10 +1,11 @@
 import "dotenv/config";
 import { z } from "zod";
 
-const boolFromString = z
-  .string()
-  .optional()
-  .transform((v) => v?.toLowerCase() === "true");
+const boolFromString = (fallback: boolean) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === "" ? fallback : v.toLowerCase() === "true"));
 
 const numFromString = (fallback: number) =>
   z
@@ -36,15 +37,24 @@ const envSchema = z.object({
 
   WALLET_PRIVATE_KEY: z.string().optional().default(""),
 
-  LIVE_TRADING: boolFromString,
+  LIVE_TRADING: boolFromString(false),
 
   MIN_MARKET_CAP_USD: numFromString(50_000),
   CONFIDENCE_THRESHOLD: numFromString(0.72),
   MAX_RISK_PCT_PER_TRADE: numFromString(0.02),
   STOP_LOSS_PCT: numFromString(0.2),
+  TRAILING_STOP_PCT: numFromString(0.25),
   MAX_POSITION_AGE_HOURS: numFromString(48),
   MIN_SOL_RESERVE: numFromString(0.5),
   WHALE_WATCHLIST_SIZE: numFromString(50),
+
+  // Rug/safety gate (src/safety/rugCheck.ts)
+  REQUIRE_MINT_AUTHORITY_REVOKED: boolFromString(true),
+  REQUIRE_FREEZE_AUTHORITY_REVOKED: boolFromString(true),
+  MAX_TOP10_HOLDER_PCT: numFromString(0.6),
+  MAX_CREATOR_PCT: numFromString(0.15),
+  BLOCK_TOKEN2022_TRANSFER_FEE: boolFromString(true),
+  MIN_LIQUIDITY_USD: numFromString(10_000),
 
   PORT: numFromString(3000),
 });

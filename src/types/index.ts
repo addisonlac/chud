@@ -53,6 +53,16 @@ export interface TopHolder {
   pctOfSupply: number;
 }
 
+export interface TokenSecurityInfo {
+  mint: string;
+  mintAuthority: string | null; // null/empty = revoked, can't mint more supply
+  freezeAuthority: string | null; // null/empty = revoked, holder accounts can't be frozen
+  top10HolderPct: number; // 0..1
+  creatorPct: number; // 0..1
+  isToken2022: boolean;
+  transferFeeEnabled: boolean; // Token-2022 extension that can silently tax/block transfers
+}
+
 // ---------------------------------------------------------------------------
 // News + sentiment
 // ---------------------------------------------------------------------------
@@ -118,6 +128,7 @@ export interface PortfolioSnapshot {
 export interface ScoringPayload {
   token: PumpFunToken;
   overview: TokenOverview;
+  security: TokenSecurityInfo;
   candles: CandleSet;
   sentiment: SentimentResult;
   whaleActivity: WhaleActivitySummary;
@@ -148,7 +159,7 @@ export interface TradeSignal {
 // ---------------------------------------------------------------------------
 
 export type PositionStatus = "open" | "closed";
-export type ExitReason = "stop_loss" | "max_age" | "manual";
+export type ExitReason = "stop_loss" | "trailing_stop" | "max_age" | "manual";
 
 export interface Position {
   id: string;
@@ -160,13 +171,36 @@ export interface Position {
   quantityTokens: number;
   costBasisUsd: number;
   costBasisSol: number;
-  stopLossPriceUsd: number;
+  stopLossPriceUsd: number; // fixed floor stop, set at entry, never moves
+  peakPriceUsd: number; // highest price observed since entry; drives the trailing stop
   maxAgeHours: number;
   exitPriceUsd?: number;
   exitTimestamp?: number;
   exitReason?: ExitReason;
   realizedPnlUsd?: number;
   signal: TradeSignal;
+}
+
+// ---------------------------------------------------------------------------
+// Trade log (win/loss ledger + AI confidence calibration)
+// ---------------------------------------------------------------------------
+
+export interface TradeLogEntry {
+  id: string;
+  mint: string;
+  symbol: string;
+  entryPriceUsd: number;
+  exitPriceUsd: number;
+  entryTimestamp: number;
+  exitTimestamp: number;
+  holdHours: number;
+  quantityTokens: number;
+  costBasisUsd: number;
+  realizedPnlUsd: number;
+  pnlPct: number;
+  exitReason: ExitReason;
+  signalConfidence: number; // AI confidence (0..1) at the time the trade was entered
+  won: boolean;
 }
 
 export interface ExecutionResult {

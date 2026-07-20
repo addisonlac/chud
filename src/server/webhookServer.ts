@@ -4,6 +4,7 @@ import { childLogger } from "../utils/logger.js";
 import { env } from "../config/env.js";
 import type { Portfolio } from "../state/portfolio.js";
 import type { PositionStore } from "../state/positionStore.js";
+import type { TradeLog } from "../state/tradeLog.js";
 import type { WhaleTracker } from "../whales/whaleTracker.js";
 import { marketContext } from "../data/marketContext.js";
 
@@ -13,6 +14,7 @@ export interface ServerDeps {
   whaleTracker: WhaleTracker;
   portfolio: Portfolio;
   positionStore: PositionStore;
+  tradeLog: TradeLog;
 }
 
 export function createServer(deps: ServerDeps): Express {
@@ -51,6 +53,17 @@ export function createServer(deps: ServerDeps): Express {
 
   app.get("/positions", (_req, res) => {
     res.json(deps.positionStore.getAll());
+  });
+
+  // Win/loss ledger + AI confidence calibration (Brier score, per-bucket
+  // realized win rate) — check this before trusting the confidence gate
+  // with real size.
+  app.get("/stats", (_req, res) => {
+    res.json(deps.tradeLog.getStats());
+  });
+
+  app.get("/trades", (_req, res) => {
+    res.json(deps.tradeLog.getAll());
   });
 
   return app;

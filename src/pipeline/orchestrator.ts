@@ -1,13 +1,15 @@
 import { PumpFunScanner } from "../scanners/pumpfun.js";
 import { passesMarketCapFilter } from "../scanners/filters.js";
-import { getCandles, getTokenOverview } from "../data/birdeye.js";
+import { getCandles, getTokenOverview, getTokenSecurity } from "../data/birdeye.js";
 import { marketContext } from "../data/marketContext.js";
 import { analyzeSentiment } from "../ai/sentiment.js";
 import { scoreTrade } from "../ai/scorer.js";
+import { assessTokenSafety, defaultRugCheckConfig } from "../safety/rugCheck.js";
 import { sizePosition, meetsConfidenceThreshold, checkExitConditions, defaultRiskConfig } from "../risk/riskManager.js";
 import { executeBuy, executeSell } from "../execution/jupiterExecutor.js";
 import { Portfolio } from "../state/portfolio.js";
 import { PositionStore } from "../state/positionStore.js";
+import { TradeLog } from "../state/tradeLog.js";
 import { WhaleTracker } from "../whales/whaleTracker.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { childLogger } from "../utils/logger.js";
@@ -23,6 +25,7 @@ export interface OrchestratorDeps {
   portfolio: Portfolio;
   positionStore: PositionStore;
   whaleTracker: WhaleTracker;
+  tradeLog: TradeLog;
 }
 
 /**
@@ -70,8 +73,19 @@ export class TradingOrchestrator {
   }
 
   private async evaluateAndMaybeTrade(token: PumpFunToken): Promise<void> {
-    const [overview, candles, news, solPriceUsd] = await Promise.all([
-      getTokenOverview(token.mint),
+    // Rug/safety gate runs first and cheaply (two Birdeye calls), before
+    // candles/news/whale enrichment and the AI calls, so an unsafe token
+    // never burns that spend. A failed security lookup throws and the
+    // caller's catch block skips the token — fail closed, not open.
+    const [overview, security] = await Promise.all([getTokenOverview(token.mint), getTokenSecurity(token.mint)]);
+
+    const safety = assessTokenSafety(security, overview, defaultRugCheckConfig());
+    if (!safety.passed) {
+      log.info({ mint: token.mint, symbol: token.symbol, reasons: safety.reasons }, "rejected by rug/safety check");
+      return;
+    }
+
+    const [candles, news, solPriceUsd] = await Promise.all([
       getCandles(token.mint), // rule #3
       marketContext.getCryptoNews(),
       marketContext.getSolPriceUsd(),
@@ -87,6 +101,7 @@ export class TradingOrchestrator {
     const payload: ScoringPayload = {
       token,
       overview,
+      security,
       candles,
       sentiment,
       whaleActivity,
@@ -146,7 +161,11 @@ export class TradingOrchestrator {
     });
   }
 
-  /** Enforces stop-loss (-20%) and 48h max-age exits. No take-profit — winners ride. */
+  /**
+   * Enforces the (trailing) stop and 48h max-age exit. No fixed
+   * take-profit — the trailing stop is what locks in gains on a winner
+   * instead of letting it round-trip back to a stop-loss.
+   */
   private async monitorPositions(): Promise<void> {
     const openPositions = this.deps.positionStore.getOpen();
     if (openPositions.length === 0) return;
@@ -157,7 +176,8 @@ export class TradingOrchestrator {
         const currentPriceUsd = overview.priceUsd;
         if (currentPriceUsd <= 0) continue;
 
-        const exitCheck = checkExitConditions(position, currentPriceUsd);
+        const tracked = (await this.deps.positionStore.updatePeakPrice(position.id, currentPriceUsd)) ?? position;
+        const exitCheck = checkExitConditions(tracked, currentPriceUsd);
         if (!exitCheck.shouldExit || !exitCheck.reason) continue;
 
         const mode = env.LIVE_TRADING ? "live" : "paper";
@@ -169,7 +189,8 @@ export class TradingOrchestrator {
 
         const proceedsSol = (currentPriceUsd * position.quantityTokens) / (await marketContext.getSolPriceUsd());
         this.deps.portfolio.applySell(proceedsSol);
-        await this.deps.positionStore.closePosition(position.id, currentPriceUsd, exitCheck.reason);
+        const closed = await this.deps.positionStore.closePosition(position.id, currentPriceUsd, exitCheck.reason);
+        if (closed) await this.deps.tradeLog.recordClosedPosition(closed);
       } catch (err) {
         log.error({ mint: position.mint, err: (err as Error).message }, "position monitor error");
       }

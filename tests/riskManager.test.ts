@@ -3,6 +3,8 @@ import {
   sizePosition,
   meetsConfidenceThreshold,
   checkExitConditions,
+  computeEffectiveStop,
+  updatePeakPrice,
   type RiskConfig,
 } from "../src/risk/riskManager.js";
 import type { PortfolioSnapshot, Position, TradeSignal } from "../src/types/index.js";
@@ -10,6 +12,7 @@ import type { PortfolioSnapshot, Position, TradeSignal } from "../src/types/inde
 const config: RiskConfig = {
   maxRiskPctPerTrade: 0.02,
   stopLossPct: 0.2,
+  trailingStopPct: 0.25,
   maxPositionAgeHours: 48,
   minSolReserve: 0.5,
   confidenceThreshold: 0.72,
@@ -97,6 +100,7 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     costBasisUsd: 100,
     costBasisSol: 0.67,
     stopLossPriceUsd: 0.8,
+    peakPriceUsd: 1,
     maxAgeHours: 48,
     signal,
     ...overrides,
@@ -105,28 +109,75 @@ function makePosition(overrides: Partial<Position> = {}): Position {
 
 describe("checkExitConditions", () => {
   it("exits on stop loss when price falls to or below the stop", () => {
-    const position = makePosition({ stopLossPriceUsd: 0.8 });
-    expect(checkExitConditions(position, 0.79).shouldExit).toBe(true);
-    expect(checkExitConditions(position, 0.8).shouldExit).toBe(true);
-    expect(checkExitConditions(position, 0.8).reason).toBe("stop_loss");
+    const position = makePosition({ stopLossPriceUsd: 0.8, peakPriceUsd: 1 });
+    expect(checkExitConditions(position, 0.79, Date.now(), config).shouldExit).toBe(true);
+    expect(checkExitConditions(position, 0.8, Date.now(), config).shouldExit).toBe(true);
+    expect(checkExitConditions(position, 0.8, Date.now(), config).reason).toBe("stop_loss");
   });
 
-  it("does not exit on profit — no take-profit rule, winners ride", () => {
-    const position = makePosition({ stopLossPriceUsd: 0.8 });
-    const result = checkExitConditions(position, 50); // 50x the entry price
+  it("does not exit while price is up but the peak hasn't moved (no take-profit rule)", () => {
+    // peakPriceUsd only reflects what the caller has recorded via
+    // updatePeakPrice; a bare price check against a stale peak shouldn't exit.
+    const position = makePosition({ stopLossPriceUsd: 0.8, peakPriceUsd: 1 });
+    const result = checkExitConditions(position, 50, Date.now(), config); // 50x the entry price
     expect(result.shouldExit).toBe(false);
   });
 
   it("exits after the max hold age even if price is fine", () => {
     const oldEntry = Date.now() - 49 * 60 * 60 * 1000; // 49h ago
-    const position = makePosition({ stopLossPriceUsd: 0.5, entryTimestamp: oldEntry, maxAgeHours: 48 });
-    const result = checkExitConditions(position, 2); // price up, but too old
+    const position = makePosition({ stopLossPriceUsd: 0.5, peakPriceUsd: 1, entryTimestamp: oldEntry, maxAgeHours: 48 });
+    const result = checkExitConditions(position, 2, Date.now(), config); // price up, but too old
     expect(result.shouldExit).toBe(true);
     expect(result.reason).toBe("max_age");
   });
 
   it("holds when neither condition is met", () => {
-    const position = makePosition({ stopLossPriceUsd: 0.8, entryTimestamp: Date.now() });
-    expect(checkExitConditions(position, 1.1).shouldExit).toBe(false);
+    const position = makePosition({ stopLossPriceUsd: 0.8, peakPriceUsd: 1, entryTimestamp: Date.now() });
+    expect(checkExitConditions(position, 1.1, Date.now(), config).shouldExit).toBe(false);
+  });
+});
+
+describe("updatePeakPrice", () => {
+  it("tracks the highest price seen, never decreasing", () => {
+    const position = makePosition({ peakPriceUsd: 2 });
+    expect(updatePeakPrice(position, 3)).toBe(3);
+    expect(updatePeakPrice(position, 1)).toBe(2); // lower price doesn't lower the peak
+  });
+});
+
+describe("computeEffectiveStop / trailing stop", () => {
+  it("stays at the fixed entry stop until the trailing stop would be higher", () => {
+    // peak barely above entry: peak*(1-0.25) doesn't clear the fixed 0.8 stop yet
+    const position = makePosition({ entryPriceUsd: 1, stopLossPriceUsd: 0.8, peakPriceUsd: 1.05 });
+    const stop = computeEffectiveStop(position, config);
+    expect(stop.isTrailing).toBe(false);
+    expect(stop.price).toBeCloseTo(0.8, 5);
+  });
+
+  it("switches to the trailing stop once the position has run up enough, locking in gains", () => {
+    // price ran to 2x entry; a 25% trail from that peak (1.5) is well above the fixed 0.8 stop
+    const position = makePosition({ entryPriceUsd: 1, stopLossPriceUsd: 0.8, peakPriceUsd: 2 });
+    const stop = computeEffectiveStop(position, config);
+    expect(stop.isTrailing).toBe(true);
+    expect(stop.price).toBeCloseTo(1.5, 5); // 2 * (1 - 0.25)
+  });
+
+  it("exits with reason trailing_stop (not stop_loss) once armed, protecting realized gains", () => {
+    const position = makePosition({ entryPriceUsd: 1, stopLossPriceUsd: 0.8, peakPriceUsd: 2 });
+    // price pulls back from the 2x peak to 1.4 — below the 1.5 trailing stop,
+    // but still 40% above entry, i.e. nowhere near the fixed -20% stop
+    const result = checkExitConditions(position, 1.4, Date.now(), config);
+    expect(result.shouldExit).toBe(true);
+    expect(result.reason).toBe("trailing_stop");
+  });
+
+  it("never lets the effective stop trail below the original fixed stop", () => {
+    // peak stayed at entry (never ran up) — trailing math would put the
+    // stop at entry*(1-0.25)=0.75, but the fixed -20% stop at 0.8 is tighter
+    // and must win, since it's what the 2%-risk position sizing was based on
+    const position = makePosition({ entryPriceUsd: 1, stopLossPriceUsd: 0.8, peakPriceUsd: 1 });
+    const stop = computeEffectiveStop(position, config);
+    expect(stop.price).toBeCloseTo(0.8, 5);
+    expect(stop.isTrailing).toBe(false);
   });
 });

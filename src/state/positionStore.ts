@@ -53,6 +53,18 @@ export class PositionStore {
     return this.positions.some((p) => p.mint === mint && p.status === "open");
   }
 
+  /** Persists a new peak price for the trailing stop. No-ops (no write) if the price isn't a new high. */
+  async updatePeakPrice(id: string, currentPriceUsd: number): Promise<Position | null> {
+    const position = this.positions.find((p) => p.id === id);
+    if (!position) return null;
+
+    if (currentPriceUsd > position.peakPriceUsd) {
+      position.peakPriceUsd = currentPriceUsd;
+      await this.persist();
+    }
+    return position;
+  }
+
   async openPosition(params: OpenPositionParams): Promise<Position> {
     const position: Position = {
       id: randomUUID(),
@@ -65,6 +77,7 @@ export class PositionStore {
       costBasisUsd: params.costBasisUsd,
       costBasisSol: params.costBasisSol,
       stopLossPriceUsd: params.stopLossPriceUsd,
+      peakPriceUsd: params.entryPriceUsd,
       maxAgeHours: params.maxAgeHours,
       signal: params.signal,
     };

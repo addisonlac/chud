@@ -1,7 +1,7 @@
 import { env } from "../config/env.js";
 import { fetchJson } from "../utils/http.js";
 import { childLogger } from "../utils/logger.js";
-import type { Candle, CandleSet, CandleTimeframe, TokenOverview, TopHolder } from "../types/index.js";
+import type { Candle, CandleSet, CandleTimeframe, TokenOverview, TokenSecurityInfo, TopHolder } from "../types/index.js";
 
 const log = childLogger("birdeye");
 
@@ -58,6 +58,18 @@ interface BirdeyeHolderResponse {
   data?: { items?: BirdeyeHolderItem[] };
 }
 
+interface BirdeyeTokenSecurityResponse {
+  success: boolean;
+  data?: {
+    mintAuthority?: string | null;
+    freezeAuthority?: string | null;
+    top10HolderPercent?: number;
+    creatorPercentage?: number;
+    isToken2022?: boolean;
+    transferFeeEnabled?: boolean;
+  };
+}
+
 function authHeaders(): Record<string, string> {
   return {
     "X-API-KEY": env.BIRDEYE_API_KEY,
@@ -111,6 +123,28 @@ export async function getTokenOverview(mint: string): Promise<TokenOverview> {
     priceChange24hPct: data.priceChange24hPercent ?? 0,
     volume24hUsd: data.v24hUSD ?? 0,
     holders: data.holder ?? 0,
+  };
+}
+
+/**
+ * Rug/safety signal used to hard-gate trades before any AI scoring happens.
+ * Deliberately does NOT catch errors and default to "safe" — a failed
+ * security lookup should block the trade (via the caller's evaluation
+ * failing closed), not silently let an unvetted token through.
+ */
+export async function getTokenSecurity(mint: string): Promise<TokenSecurityInfo> {
+  const url = `${env.BIRDEYE_BASE_URL}/defi/token_security?address=${mint}`;
+  const res = await fetchJson<BirdeyeTokenSecurityResponse>(url, { headers: authHeaders() });
+  const data = res.data ?? {};
+
+  return {
+    mint,
+    mintAuthority: data.mintAuthority ?? null,
+    freezeAuthority: data.freezeAuthority ?? null,
+    top10HolderPct: data.top10HolderPercent ?? 1,
+    creatorPct: data.creatorPercentage ?? 1,
+    isToken2022: data.isToken2022 ?? false,
+    transferFeeEnabled: data.transferFeeEnabled ?? false,
   };
 }
 

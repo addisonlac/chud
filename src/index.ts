@@ -2,6 +2,7 @@ import { env, assertRequiredConfig } from "./config/env.js";
 import { childLogger } from "./utils/logger.js";
 import { Portfolio } from "./state/portfolio.js";
 import { PositionStore } from "./state/positionStore.js";
+import { TradeLog } from "./state/tradeLog.js";
 import { WhaleTracker } from "./whales/whaleTracker.js";
 import { WhaleList } from "./whales/whaleList.js";
 import { upsertWhaleWebhook } from "./whales/heliusWebhook.js";
@@ -25,6 +26,9 @@ async function main(): Promise<void> {
 
   const positionStore = new PositionStore();
   await positionStore.load();
+
+  const tradeLog = new TradeLog();
+  await tradeLog.load();
 
   const portfolio = new Portfolio();
   if (env.LIVE_TRADING) {
@@ -58,10 +62,10 @@ async function main(): Promise<void> {
     );
   }
 
-  const app = createServer({ whaleTracker, portfolio, positionStore });
+  const app = createServer({ whaleTracker, portfolio, positionStore, tradeLog });
   app.listen(env.PORT, () => log.info({ port: env.PORT }, "webhook/status server listening"));
 
-  const orchestrator = new TradingOrchestrator({ portfolio, positionStore, whaleTracker });
+  const orchestrator = new TradingOrchestrator({ portfolio, positionStore, whaleTracker, tradeLog });
   orchestrator.start();
 
   const shutdown = () => {
