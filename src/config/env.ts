@@ -37,6 +37,9 @@ const envSchema = z.object({
 
   WALLET_PRIVATE_KEY: z.string().optional().default(""),
 
+  TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
+  TELEGRAM_CHAT_ID: z.string().optional().default(""),
+
   LIVE_TRADING: boolFromString(false),
 
   MIN_MARKET_CAP_USD: numFromString(50_000),

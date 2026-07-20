@@ -11,6 +11,7 @@ import { Portfolio } from "../state/portfolio.js";
 import { PositionStore } from "../state/positionStore.js";
 import { TradeLog } from "../state/tradeLog.js";
 import { WhaleTracker } from "../whales/whaleTracker.js";
+import { TelegramNotifier } from "../notify/telegram.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { childLogger } from "../utils/logger.js";
 import { env } from "../config/env.js";
@@ -26,6 +27,7 @@ export interface OrchestratorDeps {
   positionStore: PositionStore;
   whaleTracker: WhaleTracker;
   tradeLog: TradeLog;
+  telegram: TelegramNotifier;
 }
 
 /**
@@ -146,11 +148,12 @@ export class TradingOrchestrator {
 
     if (!result.success) {
       log.error({ mint: signal.mint, error: result.error }, "buy execution failed");
+      await this.deps.telegram.notifyExecutionError("buy", signal.symbol, result.error ?? "unknown error");
       return;
     }
 
     this.deps.portfolio.applyBuy(sizing.costBasisSol);
-    await this.deps.positionStore.openPosition({
+    const position = await this.deps.positionStore.openPosition({
       signal,
       entryPriceUsd: signal.entryPriceUsd,
       quantityTokens: sizing.quantityTokens,
@@ -159,6 +162,7 @@ export class TradingOrchestrator {
       stopLossPriceUsd: sizing.stopLossPriceUsd,
       maxAgeHours: config.maxPositionAgeHours,
     });
+    await this.deps.telegram.notifyPositionOpened(position);
   }
 
   /**
@@ -184,13 +188,17 @@ export class TradingOrchestrator {
         const result = await executeSell(position.mint, position.quantityTokens, mode);
         if (!result.success) {
           log.error({ mint: position.mint, error: result.error }, "sell execution failed");
+          await this.deps.telegram.notifyExecutionError("sell", position.symbol, result.error ?? "unknown error");
           continue;
         }
 
         const proceedsSol = (currentPriceUsd * position.quantityTokens) / (await marketContext.getSolPriceUsd());
         this.deps.portfolio.applySell(proceedsSol);
         const closed = await this.deps.positionStore.closePosition(position.id, currentPriceUsd, exitCheck.reason);
-        if (closed) await this.deps.tradeLog.recordClosedPosition(closed);
+        if (closed) {
+          const entry = await this.deps.tradeLog.recordClosedPosition(closed);
+          await this.deps.telegram.notifyPositionClosed(entry);
+        }
       } catch (err) {
         log.error({ mint: position.mint, err: (err as Error).message }, "position monitor error");
       }

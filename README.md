@@ -130,6 +130,7 @@ src/
     heliusWebhook.ts              Helius webhook registration + payload types
     whaleTracker.ts                 rolling per-mint whale buy/sell activity
   risk/riskManager.ts            position sizing, fixed + trailing stop, max-age exit
+  notify/telegram.ts             read-only trade notifications (opened/closed/errors)
   execution/
     wallet.ts                     keypair + RPC connection
     jupiterExecutor.ts             Jupiter quote/swap, paper or live
@@ -155,6 +156,7 @@ PumpFunScanner (500ms poll)
        -> sizePosition (risk manager)
        -> executeBuy (Jupiter, paper|live)
        -> PositionStore.openPosition (peakPriceUsd = entryPriceUsd)
+       -> Telegram: "OPENED $SYMBOL ..."
 
 Position monitor (every 30s, independent loop):
   for each open position:
@@ -162,6 +164,7 @@ Position monitor (every 30s, independent loop):
     -> PositionStore.updatePeakPrice (trailing-stop input)
     -> checkExitConditions (fixed -20% stop, trailing stop off the peak, OR age >= 48h)
     -> executeSell + PositionStore.closePosition + TradeLog.recordClosedPosition
+    -> Telegram: "WIN/LOSS $SYMBOL ..."
 ```
 
 Concurrency is capped at 3 simultaneous token evaluations
@@ -207,6 +210,38 @@ bot registers/updates a Helius enhanced webhook covering those addresses.
 `HELIUS_WEBHOOK_URL` must be a publicly reachable URL pointing at this
 service's `/webhooks/helius` endpoint (e.g. via a reverse proxy or tunnel
 in local dev).
+
+### Connecting Telegram notifications
+
+The bot can post trade activity to a Telegram chat: `OPENED $SYMBOL ...`,
+`WIN/LOSS $SYMBOL ...` on close, and execution errors. It's read-only —
+there are no bot commands and it can't control trading — see
+`src/notify/telegram.ts`. Setup:
+
+1. **Create/reuse a bot token.** Message [@BotFather](https://t.me/BotFather)
+   on Telegram, send `/newbot` (or reuse an existing bot you already
+   control), and copy the token it gives you (looks like
+   `123456789:AAH...`).
+2. **Get your chat ID.** Send any message to your new bot first (Telegram
+   won't deliver to a chat it hasn't seen you in), then open:
+   `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
+   in a browser — the JSON response includes `"chat":{"id": ...}`. Use that
+   number as `TELEGRAM_CHAT_ID`. (For a group chat, add the bot to the
+   group first and send a message there instead; group chat IDs are
+   negative numbers, which is expected.)
+3. Set both in `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=123456789:AAH...
+   TELEGRAM_CHAT_ID=987654321
+   ```
+4. Restart the bot. You should see the startup message
+   (`🤖 Bot started in PAPER mode...`) land in the chat immediately — that
+   confirms the token/chat ID are correct before you wait for a real
+   signal.
+
+If either var is unset, the notifier just logs a warning once at startup
+and no-ops for the rest of the run — trading is unaffected either way, and
+nothing about this integration touches `LIVE_TRADING`.
 
 ### pump.fun endpoint caveat
 

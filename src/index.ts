@@ -9,6 +9,7 @@ import { upsertWhaleWebhook } from "./whales/heliusWebhook.js";
 import { TradingOrchestrator } from "./pipeline/orchestrator.js";
 import { createServer } from "./server/webhookServer.js";
 import { getWalletKeypair, getSolBalance } from "./execution/wallet.js";
+import { TelegramNotifier } from "./notify/telegram.js";
 
 const log = childLogger("bootstrap");
 
@@ -62,10 +63,13 @@ async function main(): Promise<void> {
     );
   }
 
+  const telegram = new TelegramNotifier();
+  await telegram.notifyStartup(env.LIVE_TRADING ? "live" : "paper");
+
   const app = createServer({ whaleTracker, portfolio, positionStore, tradeLog });
   app.listen(env.PORT, () => log.info({ port: env.PORT }, "webhook/status server listening"));
 
-  const orchestrator = new TradingOrchestrator({ portfolio, positionStore, whaleTracker, tradeLog });
+  const orchestrator = new TradingOrchestrator({ portfolio, positionStore, whaleTracker, tradeLog, telegram });
   orchestrator.start();
 
   const shutdown = () => {
