@@ -24,6 +24,9 @@ const envSchema = z.object({
 
   BIRDEYE_API_KEY: z.string().optional().default(""),
   BIRDEYE_BASE_URL: z.string().default("https://public-api.birdeye.so"),
+  // Minimum gap between Birdeye requests, to stay under the free tier's
+  // rate limit (raise if you still see 429s; lower on a paid plan).
+  BIRDEYE_MIN_REQUEST_INTERVAL_MS: numFromString(1200),
 
   // Token discovery source. "pumpportal" (default) streams new pump.fun
   // tokens over a WebSocket built for bots — reliable and free. "pumpfun"

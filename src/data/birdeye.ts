@@ -1,9 +1,26 @@
 import { env } from "../config/env.js";
-import { fetchJson } from "../utils/http.js";
+import { fetchJson, sleep } from "../utils/http.js";
 import { childLogger } from "../utils/logger.js";
 import type { Candle, CandleSet, CandleTimeframe, TokenOverview, TokenSecurityInfo, TopHolder } from "../types/index.js";
 
 const log = childLogger("birdeye");
+
+// Global request throttle: Birdeye's free tier rate-limits aggressively
+// (429s), and the pipeline fires several Birdeye calls per token. This
+// serializes them with a minimum gap so the bot self-limits instead of
+// getting throttled. Evaluations get slower, but they succeed.
+let birdeyeChain: Promise<void> = Promise.resolve();
+function throttleBirdeye(): Promise<void> {
+  const next = birdeyeChain.then(() => sleep(env.BIRDEYE_MIN_REQUEST_INTERVAL_MS));
+  // swallow errors on the chain so one failure doesn't break the queue
+  birdeyeChain = next.catch(() => undefined);
+  return next;
+}
+
+async function birdeyeFetch<T>(url: string): Promise<T> {
+  await throttleBirdeye();
+  return fetchJson<T>(url, { headers: authHeaders() });
+}
 
 // Birdeye's `type` query param values for the OHLCV endpoint.
 const TIMEFRAME_TO_BIRDEYE_TYPE: Record<CandleTimeframe, string> = {
@@ -87,7 +104,7 @@ async function getCandlesForTimeframe(mint: string, timeframe: CandleTimeframe):
     `${env.BIRDEYE_BASE_URL}/defi/ohlcv?address=${mint}` +
     `&type=${type}&time_from=${from}&time_to=${now}`;
 
-  const res = await fetchJson<BirdeyeOhlcvResponse>(url, { headers: authHeaders() });
+  const res = await birdeyeFetch<BirdeyeOhlcvResponse>(url);
 
   return (res.data?.items ?? []).map((item) => ({
     timestamp: item.unixTime,
@@ -112,7 +129,7 @@ export async function getCandles(mint: string): Promise<CandleSet> {
 
 export async function getTokenOverview(mint: string): Promise<TokenOverview> {
   const url = `${env.BIRDEYE_BASE_URL}/defi/token_overview?address=${mint}`;
-  const res = await fetchJson<BirdeyeTokenOverviewResponse>(url, { headers: authHeaders() });
+  const res = await birdeyeFetch<BirdeyeTokenOverviewResponse>(url);
   const data = res.data ?? {};
 
   return {
@@ -134,7 +151,7 @@ export async function getTokenOverview(mint: string): Promise<TokenOverview> {
  */
 export async function getTokenSecurity(mint: string): Promise<TokenSecurityInfo> {
   const url = `${env.BIRDEYE_BASE_URL}/defi/token_security?address=${mint}`;
-  const res = await fetchJson<BirdeyeTokenSecurityResponse>(url, { headers: authHeaders() });
+  const res = await birdeyeFetch<BirdeyeTokenSecurityResponse>(url);
   const data = res.data ?? {};
 
   return {
@@ -153,7 +170,7 @@ export async function getTopHolders(mint: string, limit = 50): Promise<TopHolder
   const url = `${env.BIRDEYE_BASE_URL}/defi/v3/token/holder?address=${mint}&offset=0&limit=${limit}`;
 
   try {
-    const res = await fetchJson<BirdeyeHolderResponse>(url, { headers: authHeaders() });
+    const res = await birdeyeFetch<BirdeyeHolderResponse>(url);
     return (res.data?.items ?? []).map((item) => ({
       wallet: item.owner,
       amountUsd: item.ui_amount ?? 0,
@@ -179,7 +196,7 @@ interface BirdeyeTrendingResponse {
 export async function getTrendingTokenMints(limit = 20): Promise<string[]> {
   const url = `${env.BIRDEYE_BASE_URL}/defi/token_trending?sort_by=rank&sort_type=asc&offset=0&limit=${limit}`;
   try {
-    const res = await fetchJson<BirdeyeTrendingResponse>(url, { headers: authHeaders() });
+    const res = await birdeyeFetch<BirdeyeTrendingResponse>(url);
     return (res.data?.tokens ?? []).map((t) => t.address).filter(Boolean);
   } catch (err) {
     log.warn({ err: (err as Error).message }, "failed to fetch trending tokens");

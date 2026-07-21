@@ -24,13 +24,14 @@ class MarketContext {
 
   async getSolPriceUsd(): Promise<number> {
     if (Date.now() - this.solPriceFetchedAt < SOL_PRICE_TTL_MS) return this.solPriceUsd;
+    // Mark the attempt time BEFORE fetching so a failure (e.g. a Birdeye
+    // 429) still backs off for the full TTL instead of retrying on every
+    // single token event — which otherwise turns one 429 into a storm.
+    this.solPriceFetchedAt = Date.now();
 
     try {
       const overview = await getTokenOverview(SOL_MINT);
-      if (overview.priceUsd > 0) {
-        this.solPriceUsd = overview.priceUsd;
-        this.solPriceFetchedAt = Date.now();
-      }
+      if (overview.priceUsd > 0) this.solPriceUsd = overview.priceUsd;
     } catch (err) {
       log.warn({ err: (err as Error).message }, "failed to refresh SOL price, using stale value");
     }
@@ -40,10 +41,10 @@ class MarketContext {
 
   async getCryptoNews(): Promise<NewsItem[]> {
     if (Date.now() - this.newsFetchedAt < NEWS_TTL_MS) return this.news;
+    this.newsFetchedAt = Date.now(); // back off on failure too (see getSolPriceUsd)
 
     try {
       this.news = await fetchCryptoNews();
-      this.newsFetchedAt = Date.now();
     } catch (err) {
       log.warn({ err: (err as Error).message }, "failed to refresh crypto news, using stale value");
     }
