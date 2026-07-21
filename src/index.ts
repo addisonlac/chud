@@ -10,6 +10,7 @@ import { TradingOrchestrator } from "./pipeline/orchestrator.js";
 import { createServer } from "./server/webhookServer.js";
 import { getWalletKeypair, getSolBalance } from "./execution/wallet.js";
 import { TelegramNotifier } from "./notify/telegram.js";
+import { TelegramCommandListener, formatStatusReply, formatStatsReply, formatPositionsReply } from "./notify/telegramCommands.js";
 import { marketContext } from "./data/marketContext.js";
 
 const log = childLogger("bootstrap");
@@ -67,6 +68,24 @@ async function main(): Promise<void> {
   const telegram = new TelegramNotifier();
   await telegram.notifyStartup(env.LIVE_TRADING ? "live" : "paper");
 
+  const commandListener = new TelegramCommandListener({
+    getStatusReply: async () => {
+      const openPositions = positionStore.getOpen();
+      const solPriceUsd = await marketContext.getSolPriceUsd();
+      const openPositionsValueUsd = openPositions.reduce((sum, p) => sum + p.costBasisUsd, 0);
+      const snapshot = portfolio.getSnapshot(openPositionsValueUsd, solPriceUsd, openPositions.length);
+      return formatStatusReply({
+        mode: env.LIVE_TRADING ? "live" : "paper",
+        solBalance: snapshot.solBalance,
+        totalValueUsd: snapshot.totalValueUsd,
+        openPositions,
+      });
+    },
+    getStatsReply: async () => formatStatsReply(tradeLog.getStats()),
+    getPositionsReply: async () => formatPositionsReply(positionStore.getOpen()),
+  });
+  commandListener.start();
+
   const app = createServer({ portfolio, positionStore, tradeLog });
   app.listen(env.PORT, () => log.info({ port: env.PORT }, "webhook/status server listening"));
 
@@ -77,6 +96,7 @@ async function main(): Promise<void> {
     log.info("shutting down");
     orchestrator.stop();
     whalePoller.stop();
+    commandListener.stop();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

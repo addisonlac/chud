@@ -5,7 +5,7 @@ import type { Position, TradeLogEntry } from "../types/index.js";
 
 const log = childLogger("telegram");
 
-const TELEGRAM_API_BASE = "https://api.telegram.org";
+export const TELEGRAM_API_BASE = "https://api.telegram.org";
 const MAX_REASONING_CHARS = 220;
 
 // --- Pure message formatting (unit-testable without hitting the network) ---
@@ -62,16 +62,39 @@ interface TelegramSendMessageResponse {
 }
 
 /**
- * Read-only trading visibility: posts trade opened/closed and execution
- * errors to a Telegram chat. Deliberately does NOT push a notification for
- * every rejected/filtered token — pump.fun's scan volume would make that
- * spam, not signal. Rejections stay in the structured logs.
+ * Shared by TelegramNotifier (push) and TelegramCommandListener (reply).
  *
  * No parse_mode is set on purpose: token symbols/names come from pump.fun
  * and are attacker-controlled (anyone can name a token anything). Enabling
  * HTML/Markdown parsing on untrusted text risks malformed-entity 400s that
  * would silently break every notification, or odd rendering — plain text
  * sidesteps both.
+ */
+export async function sendTelegramMessage(text: string): Promise<void> {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+
+  try {
+    const res = await fetchJson<TelegramSendMessageResponse>(`${TELEGRAM_API_BASE}/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text, disable_web_page_preview: true }),
+      timeoutMs: 8000,
+      retries: 1,
+    });
+    if (!res.ok) {
+      log.error({ description: res.description }, "Telegram API rejected the message");
+    }
+  } catch (err) {
+    // A send failure must never break the trading pipeline.
+    log.error({ err: (err as Error).message }, "failed to send Telegram message");
+  }
+}
+
+/**
+ * Read-only trading visibility: posts trade opened/closed and execution
+ * errors to a Telegram chat. Deliberately does NOT push a notification for
+ * every rejected/filtered token — pump.fun's scan volume would make that
+ * spam, not signal. Rejections stay in the structured logs.
  */
 export class TelegramNotifier {
   private readonly enabled: boolean;
@@ -83,42 +106,19 @@ export class TelegramNotifier {
     }
   }
 
-  private async send(text: string): Promise<void> {
-    if (!this.enabled) return;
-
-    try {
-      const res = await fetchJson<TelegramSendMessageResponse>(
-        `${TELEGRAM_API_BASE}/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text, disable_web_page_preview: true }),
-          timeoutMs: 8000,
-          retries: 1,
-        },
-      );
-      if (!res.ok) {
-        log.error({ description: res.description }, "Telegram API rejected the message");
-      }
-    } catch (err) {
-      // A notification failure must never break the trading pipeline.
-      log.error({ err: (err as Error).message }, "failed to send Telegram notification");
-    }
-  }
-
   async notifyStartup(mode: "paper" | "live"): Promise<void> {
-    await this.send(formatStartupMessage(mode));
+    if (this.enabled) await sendTelegramMessage(formatStartupMessage(mode));
   }
 
   async notifyPositionOpened(position: Position): Promise<void> {
-    await this.send(formatPositionOpenedMessage(position));
+    if (this.enabled) await sendTelegramMessage(formatPositionOpenedMessage(position));
   }
 
   async notifyPositionClosed(entry: TradeLogEntry): Promise<void> {
-    await this.send(formatPositionClosedMessage(entry));
+    if (this.enabled) await sendTelegramMessage(formatPositionClosedMessage(entry));
   }
 
   async notifyExecutionError(context: string, symbol: string, error: string): Promise<void> {
-    await this.send(formatExecutionErrorMessage(context, symbol, error));
+    if (this.enabled) await sendTelegramMessage(formatExecutionErrorMessage(context, symbol, error));
   }
 }

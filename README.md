@@ -165,7 +165,9 @@ src/
     solanaWhalePoller.ts          polls free public Solana RPC per watched wallet
     whaleTracker.ts                 rolling per-mint whale buy/sell activity
   risk/riskManager.ts            position sizing, fixed + trailing stop, max-age exit
-  notify/telegram.ts             read-only trade notifications (opened/closed/errors)
+  notify/
+    telegram.ts                   push notifications (opened/closed/errors)
+    telegramCommands.ts             /status /stats /positions /help (long-polling, owner-only)
   execution/
     wallet.ts                     keypair + RPC connection
     jupiterExecutor.ts             Jupiter quote/swap, paper or live
@@ -256,12 +258,28 @@ get) a paid RPC endpoint (Helius, Triton, etc.), just point
 `SOLANA_RPC_URL` at it — no code changes needed, and polling will
 naturally get faster/more reliable since the rate limits ease up.
 
-### Connecting Telegram notifications
+### Connecting Telegram
 
-The bot can post trade activity to a Telegram chat: `OPENED $SYMBOL ...`,
-`WIN/LOSS $SYMBOL ...` on close, and execution errors. It's read-only —
-there are no bot commands and it can't control trading — see
-`src/notify/telegram.ts`. Setup:
+The bot posts trade activity to a Telegram chat — `OPENED $SYMBOL ...`,
+`WIN/LOSS $SYMBOL ...` on close, and execution errors (`src/notify/telegram.ts`)
+— and separately responds to commands you send it
+(`src/notify/telegramCommands.ts`):
+
+| Command      | Replies with                                    |
+|--------------|--------------------------------------------------|
+| `/status`    | Mode, SOL balance, total value, open positions    |
+| `/stats`     | Win rate, expectancy, Brier score, calibration warning |
+| `/positions` | Entry price + stop for each open position         |
+| `/help`      | This list                                         |
+
+Commands are read-only status queries — there's no `/pause`, `/resume`, or
+manual `/buy`/`/sell`; the bot can't be remote-controlled via Telegram,
+only observed. Command handling uses long-polling
+(`getUpdates`), not a webhook, so it works from a laptop behind NAT with
+no public URL or tunnel needed. Every incoming message is checked against
+`TELEGRAM_CHAT_ID` and silently ignored if it's from any other chat —
+even if someone finds your bot's username and messages it, it won't
+respond or reveal that it's connected to anything. Setup:
 
 1. **Create/reuse a bot token.** Message [@BotFather](https://t.me/BotFather)
    on Telegram, send `/newbot` (or reuse an existing bot you already
@@ -284,9 +302,10 @@ there are no bot commands and it can't control trading — see
    confirms the token/chat ID are correct before you wait for a real
    signal.
 
-If either var is unset, the notifier just logs a warning once at startup
-and no-ops for the rest of the run — trading is unaffected either way, and
-nothing about this integration touches `LIVE_TRADING`.
+If either var is unset, both the notifier and the command listener just
+log a warning once at startup and no-op for the rest of the run — trading
+is unaffected either way, and nothing about this integration touches
+`LIVE_TRADING`.
 
 ### pump.fun endpoint caveat
 
