@@ -34,13 +34,13 @@ const envSchema = z.object({
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api.pump.fun"),
   PUMPFUN_SCAN_INTERVAL_MS: numFromString(200),
 
-  // Whale wallet tracking polls the free public Solana RPC (SOLANA_RPC_URL
-  // below) instead of Helius webhooks. The free public endpoint is heavily
-  // rate-limited (frequent 429s when polling many wallets) — set
-  // WHALE_TRACKING_ENABLED=false to turn this optional signal off entirely,
-  // or point SOLANA_RPC_URL at a better RPC. WHALE_POLL_INTERVAL_MS is
+  // Whale wallet tracking polls the Solana RPC (SOLANA_RPC_URL below). It
+  // defaults to OFF because the free public RPC endpoint is heavily
+  // rate-limited and produces a storm of 429s when polling many wallets.
+  // To use it: point SOLANA_RPC_URL at a real RPC (e.g. a free Helius RPC
+  // key) and set WHALE_TRACKING_ENABLED=true. WHALE_POLL_INTERVAL_MS is
   // deliberately conservative to reduce throttling.
-  WHALE_TRACKING_ENABLED: boolFromString(true),
+  WHALE_TRACKING_ENABLED: boolFromString(false),
   WHALE_POLL_INTERVAL_MS: numFromString(60_000),
 
   NEWSAPI_KEY: z.string().optional().default(""),
