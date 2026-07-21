@@ -17,7 +17,9 @@ via Jupiter under a fixed set of risk rules.
 
 ## Strategy
 
-1. **Scan** — poll pump.fun for newly created tokens every 200ms.
+1. **Scan** — stream newly created pump.fun tokens in real time via
+   PumpPortal's WebSocket (default), or poll pump.fun's HTTP endpoint
+   (`SCANNER_SOURCE=pumpfun`).
 2. **Filter** — only tokens with market cap > $50k move forward.
 3. **Rug/safety gate** — reject anything with an un-revoked mint/freeze
    authority, excessive holder/creator concentration, a Token-2022
@@ -149,7 +151,9 @@ src/
   config/env.ts          env var loading + validation (zod)
   types/index.ts          shared types across the pipeline
   scanners/
-    pumpfun.ts             200ms poller for new pump.fun tokens
+    pumpportal.ts          new-token stream via PumpPortal websocket (default)
+    pumpfun.ts             HTTP poller for new pump.fun tokens (fallback)
+    types.ts                shared TokenScanner interface
     filters.ts              market-cap filter (rule #2)
   data/
     birdeye.ts               candles (5m/1h/1d), token overview, top holders, token security
@@ -183,7 +187,7 @@ src/
 ### Data flow
 
 ```
-PumpFunScanner (200ms poll)
+PumpPortalScanner (websocket stream)  [or PumpFunScanner HTTP poll]
   -> passesMarketCapFilter (>$50k)
   -> [Birdeye overview + token_security] -> assessTokenSafety (hard gate, fails closed)
   -> [Birdeye candles] + [NewsAPI -> Sentiment(Groq)] + [WhaleTracker activity]
@@ -307,15 +311,26 @@ log a warning once at startup and no-op for the rest of the run — trading
 is unaffected either way, and nothing about this integration touches
 `LIVE_TRADING`.
 
-### pump.fun endpoint caveat
+### Token discovery sources
 
-`src/scanners/pumpfun.ts` polls pump.fun's unofficial `frontend-api`
-endpoint, which is what most community bots use since there's no official
-public REST API. It's undocumented and can change or rate-limit without
-notice. If it becomes unreliable, swap the scanner's fetch for
-[PumpPortal](https://pumpportal.fun)'s free real-time WebSocket API for
-new-token events — the rest of the pipeline (`PumpFunToken` shape and
-downstream consumers) doesn't need to change.
+The bot has two interchangeable ways to discover new pump.fun tokens,
+selected by `SCANNER_SOURCE`:
+
+- **`pumpportal` (default)** — `src/scanners/pumpportal.ts` subscribes to
+  [PumpPortal](https://pumpportal.fun)'s free real-time WebSocket
+  (`subscribeNewToken`). It's built for programmatic consumers, so it
+  isn't subject to the Cloudflare bot-blocking that plagues pump.fun's own
+  endpoint. Auto-reconnects with exponential backoff. Recommended.
+- **`pumpfun`** — `src/scanners/pumpfun.ts` polls pump.fun's unofficial
+  `frontend-api` HTTP endpoint. This endpoint sits behind Cloudflare and
+  frequently returns **HTTP 530/403** to non-browser traffic; the scanner
+  sends browser-like headers to try to get past it, but this is
+  unreliable. Only use it if PumpPortal is down.
+
+Both emit the same `PumpFunToken` shape, so the rest of the pipeline
+doesn't care which is active. If you see no tokens flowing (nothing ever
+reaches the market-cap filter), the discovery source is almost always the
+cause — check the scanner logs.
 
 ## Running
 

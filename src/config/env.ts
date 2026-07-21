@@ -25,6 +25,12 @@ const envSchema = z.object({
   BIRDEYE_API_KEY: z.string().optional().default(""),
   BIRDEYE_BASE_URL: z.string().default("https://public-api.birdeye.so"),
 
+  // Token discovery source. "pumpportal" (default) streams new pump.fun
+  // tokens over a WebSocket built for bots — reliable and free. "pumpfun"
+  // polls pump.fun's unofficial HTTP endpoint, which sits behind Cloudflare
+  // and frequently returns HTTP 530/403 to non-browser traffic.
+  SCANNER_SOURCE: z.enum(["pumpportal", "pumpfun"]).default("pumpportal"),
+  PUMPPORTAL_WS_URL: z.string().default("wss://pumpportal.fun/api/data"),
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api.pump.fun"),
   PUMPFUN_SCAN_INTERVAL_MS: numFromString(200),
 

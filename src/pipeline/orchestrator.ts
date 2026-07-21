@@ -1,4 +1,6 @@
 import { PumpFunScanner } from "../scanners/pumpfun.js";
+import { PumpPortalScanner } from "../scanners/pumpportal.js";
+import type { TokenScanner } from "../scanners/types.js";
 import { passesMarketCapFilter } from "../scanners/filters.js";
 import { getCandles, getTokenOverview, getTokenSecurity } from "../data/birdeye.js";
 import { marketContext } from "../data/marketContext.js";
@@ -37,20 +39,28 @@ export interface OrchestratorDeps {
  * max age) on open positions.
  */
 export class TradingOrchestrator {
-  private readonly scanner = new PumpFunScanner();
+  private readonly scanner: TokenScanner;
   private readonly semaphore = new Semaphore(MAX_CONCURRENT_EVALUATIONS);
   private positionMonitorTimer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly deps: OrchestratorDeps) {}
+  constructor(private readonly deps: OrchestratorDeps) {
+    // Default to PumpPortal's websocket (reliable, bot-friendly); the
+    // pump.fun HTTP poller stays available via SCANNER_SOURCE=pumpfun.
+    this.scanner =
+      env.SCANNER_SOURCE === "pumpfun"
+        ? new PumpFunScanner()
+        : new PumpPortalScanner(() => marketContext.getSolPriceUsd());
+  }
 
   start(): void {
+    log.info({ source: env.SCANNER_SOURCE }, "using token discovery source");
     this.scanner.on("newToken", (token) => {
       void this.handleNewToken(token);
     });
-    // PumpFunScanner emits "error" on a failed poll tick (already logged
-    // internally too). Node crashes the whole process on an unhandled
-    // "error" event if nothing is listening for it -- this listener is
-    // what keeps a transient pump.fun outage from taking the bot down.
+    // Both scanners emit "error" on failures (already logged internally).
+    // Node crashes the whole process on an unhandled "error" event if
+    // nothing is listening for it -- this listener keeps a transient
+    // scanner outage from taking the bot down.
     this.scanner.on("error", () => {});
     this.scanner.start();
 
