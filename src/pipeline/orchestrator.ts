@@ -47,6 +47,11 @@ export class TradingOrchestrator {
     this.scanner.on("newToken", (token) => {
       void this.handleNewToken(token);
     });
+    // PumpFunScanner emits "error" on a failed poll tick (already logged
+    // internally too). Node crashes the whole process on an unhandled
+    // "error" event if nothing is listening for it -- this listener is
+    // what keeps a transient pump.fun outage from taking the bot down.
+    this.scanner.on("error", () => {});
     this.scanner.start();
 
     this.positionMonitorTimer = setInterval(() => void this.monitorPositions(), POSITION_MONITOR_INTERVAL_MS);
