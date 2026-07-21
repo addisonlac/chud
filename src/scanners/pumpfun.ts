@@ -66,6 +66,18 @@ export declare interface PumpFunScanner {
  * per-tick: a single failed fetch logs and waits for the next tick instead
  * of tearing down the loop.
  */
+// pump.fun's frontend API sits behind Cloudflare and rejects requests that
+// don't look like they came from the pump.fun web app (HTTP 530/403). These
+// browser-like headers make the poll look like the site's own XHR calls,
+// which gets past the basic bot filter most of the time.
+const BROWSER_HEADERS: Record<string, string> = {
+  accept: "application/json",
+  "user-agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  origin: "https://pump.fun",
+  referer: "https://pump.fun/",
+};
+
 export class PumpFunScanner extends EventEmitter {
   private readonly baseUrl: string;
   private readonly intervalMs: number;
@@ -76,6 +88,7 @@ export class PumpFunScanner extends EventEmitter {
   private seenOrder: string[] = [];
   private timer: NodeJS.Timeout | null = null;
   private inFlight = false;
+  private consecutiveFailures = 0;
 
   constructor(options: PumpFunScannerOptions = {}) {
     super();
@@ -98,10 +111,25 @@ export class PumpFunScanner extends EventEmitter {
 
   private async tick(): Promise<void> {
     if (this.inFlight) return; // don't stack requests if one tick runs long
+
+    // Back off when the endpoint is consistently failing (e.g. Cloudflare
+    // is blocking us): after a run of failures, only actually attempt the
+    // request on a fraction of ticks, so we stop hammering a dead endpoint
+    // and stop flooding the logs with one warning every interval.
+    if (this.consecutiveFailures > 5) {
+      const skipFactor = Math.min(this.consecutiveFailures, 60); // cap the backoff
+      if (Math.floor(Date.now() / this.intervalMs) % skipFactor !== 0) return;
+    }
+
     this.inFlight = true;
     try {
       const url = `${this.baseUrl}/coins?offset=0&limit=${this.pageLimit}&sort=created_timestamp&order=DESC`;
-      const raw = await fetchJson<PumpFunCoinRaw[]>(url, { timeoutMs: 2000, retries: 0 });
+      const raw = await fetchJson<PumpFunCoinRaw[]>(url, { timeoutMs: 2000, retries: 0, headers: BROWSER_HEADERS });
+
+      if (this.consecutiveFailures > 0) {
+        log.info("pump.fun endpoint recovered");
+        this.consecutiveFailures = 0;
+      }
 
       for (const rawCoin of raw) {
         if (this.seenMints.has(rawCoin.mint)) continue;
@@ -109,7 +137,14 @@ export class PumpFunScanner extends EventEmitter {
         this.emit("newToken", mapRawCoin(rawCoin));
       }
     } catch (err) {
-      log.warn({ err: (err as Error).message }, "pump.fun poll failed");
+      this.consecutiveFailures++;
+      // Only log the first failure and then occasionally, instead of every tick.
+      if (this.consecutiveFailures === 1 || this.consecutiveFailures % 20 === 0) {
+        log.warn(
+          { err: (err as Error).message, consecutiveFailures: this.consecutiveFailures },
+          "pump.fun poll failing (endpoint may be blocking requests — see README pump.fun caveat)",
+        );
+      }
       this.emit("error", err as Error);
     } finally {
       this.inFlight = false;
