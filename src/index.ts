@@ -87,7 +87,20 @@ async function main(): Promise<void> {
   commandListener.start();
 
   const app = createServer({ portfolio, positionStore, tradeLog });
-  app.listen(env.PORT, () => log.info({ port: env.PORT }, "webhook/status server listening"));
+  const server = app.listen(env.PORT, () => log.info({ port: env.PORT }, "webhook/status server listening"));
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      log.error(
+        { port: env.PORT },
+        `Port ${env.PORT} is already in use — either stop whatever else is running on it ` +
+          `(a previous "npm run dev" left running in another terminal tab is the usual cause), ` +
+          `or set a different PORT in .env and restart.`,
+      );
+    } else {
+      log.error({ err: err.message }, "server failed to start");
+    }
+    process.exit(1);
+  });
 
   const orchestrator = new TradingOrchestrator({ portfolio, positionStore, whaleTracker, tradeLog, telegram });
   orchestrator.start();
