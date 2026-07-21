@@ -12,6 +12,7 @@ import { getWalletKeypair, getSolBalance } from "./execution/wallet.js";
 import { TelegramNotifier } from "./notify/telegram.js";
 import { TelegramCommandListener, formatStatusReply, formatStatsReply, formatPositionsReply } from "./notify/telegramCommands.js";
 import { marketContext } from "./data/marketContext.js";
+import { getTrendingTokenMints } from "./data/birdeye.js";
 
 const log = childLogger("bootstrap");
 
@@ -46,9 +47,28 @@ async function main(): Promise<void> {
 
   const whaleTracker = new WhaleTracker();
   const whaleList = new WhaleList();
-  const savedWhales = await whaleList.load();
+  let savedWhales = await whaleList.load();
 
   const whalePoller = new SolanaWhalePoller(whaleTracker, () => marketContext.getSolPriceUsd());
+
+  // No hand-curated watchlist? Auto-seed one from the large holders of
+  // currently-trending Solana tokens (a documented proxy for "smart
+  // money" — see README) so whale tracking works out of the box. Edit
+  // data/whale-watchlist.json afterwards to curate it with wallets you
+  // actually trust.
+  if (savedWhales.length === 0 && env.BIRDEYE_API_KEY) {
+    log.info("no whale watchlist found — auto-seeding from trending tokens' top holders (this can take a moment)");
+    try {
+      const trendingMints = await getTrendingTokenMints(15);
+      if (trendingMints.length > 0) {
+        await whaleList.discoverFromTrendingTokens(trendingMints);
+        await whaleList.save();
+        savedWhales = whaleList.get();
+      }
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, "whale auto-seed failed — continuing without whale tracking");
+    }
+  }
 
   if (savedWhales.length > 0) {
     whaleTracker.setWatchlist(whaleList.addresses());
@@ -56,12 +76,12 @@ async function main(): Promise<void> {
     whalePoller.start();
     log.info(
       { count: savedWhales.length },
-      "loaded whale watchlist from disk, polling via free public Solana RPC (see README free-tier tradeoffs)",
+      "whale watchlist active, polling via free public Solana RPC (see README free-tier tradeoffs)",
     );
   } else {
-    log.warn(
-      "No whale watchlist found at data/whale-watchlist.json — whale activity will be empty until one is seeded. " +
-        "See README for how to populate it.",
+    log.info(
+      "Whale tracking is OFF (no watchlist and none could be auto-seeded). This is fine — it's one " +
+        "optional signal; the bot trades without it. To enable later, add wallet addresses to data/whale-watchlist.json.",
     );
   }
 

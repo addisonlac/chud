@@ -164,3 +164,25 @@ export async function getTopHolders(mint: string, limit = 50): Promise<TopHolder
     return [];
   }
 }
+
+interface BirdeyeTrendingResponse {
+  success: boolean;
+  data?: { tokens?: { address: string }[] };
+}
+
+/**
+ * Currently-trending Solana token mints. Used to auto-seed the whale
+ * watchlist (rule #5) from the large holders of active tokens when no
+ * hand-curated list exists yet. Returns [] on failure rather than throwing
+ * — an empty watchlist just means whale activity is empty, not a crash.
+ */
+export async function getTrendingTokenMints(limit = 20): Promise<string[]> {
+  const url = `${env.BIRDEYE_BASE_URL}/defi/token_trending?sort_by=rank&sort_type=asc&offset=0&limit=${limit}`;
+  try {
+    const res = await fetchJson<BirdeyeTrendingResponse>(url, { headers: authHeaders() });
+    return (res.data?.tokens ?? []).map((t) => t.address).filter(Boolean);
+  } catch (err) {
+    log.warn({ err: (err as Error).message }, "failed to fetch trending tokens");
+    return [];
+  }
+}

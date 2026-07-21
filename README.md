@@ -235,9 +235,14 @@ Required accounts/keys:
 
 ### Whale tracking (free public Solana RPC)
 
-Rule #5 needs a list of wallet addresses to watch. There's no single
-authoritative "top 50 whale" API, so seed `data/whale-watchlist.json`
-yourself, e.g.:
+Rule #5 watches a list of wallet addresses. **You don't have to configure
+anything** — on first startup, if `data/whale-watchlist.json` doesn't
+exist and a `BIRDEYE_API_KEY` is set, the bot auto-seeds it from the large
+holders of currently-trending Solana tokens (a documented proxy for "smart
+money") and saves it to disk. Whale tracking is also fully optional: it's
+one signal among several, and the bot trades fine without it.
+
+To curate the list by hand instead, edit `data/whale-watchlist.json`:
 
 ```json
 [
@@ -245,9 +250,10 @@ yourself, e.g.:
 ]
 ```
 
-or call `WhaleList.discoverFromTrendingTokens([...mints])` (see
-`src/whales/whaleList.ts`) to seed it from large holders of currently
-trending tokens as a starting point, then curate by hand.
+The auto-seed is just a starting point — large holders of trending tokens
+aren't necessarily *profitable* traders. For a real edge, replace it with
+wallets you've verified have a track record (e.g. via Dune/on-chain
+analysis).
 
 On startup, if a watchlist exists, `SolanaWhalePoller`
 (`src/whales/solanaWhalePoller.ts`) starts polling `SOLANA_RPC_URL` for
