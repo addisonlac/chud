@@ -75,18 +75,6 @@ interface BirdeyeHolderResponse {
   data?: { items?: BirdeyeHolderItem[] };
 }
 
-interface BirdeyeTokenSecurityResponse {
-  success: boolean;
-  data?: {
-    mintAuthority?: string | null;
-    freezeAuthority?: string | null;
-    top10HolderPercent?: number;
-    creatorPercentage?: number;
-    isToken2022?: boolean;
-    transferFeeEnabled?: boolean;
-  };
-}
-
 function authHeaders(): Record<string, string> {
   return {
     "X-API-KEY": env.BIRDEYE_API_KEY,
@@ -116,14 +104,24 @@ async function getCandlesForTimeframe(mint: string, timeframe: CandleTimeframe):
   }));
 }
 
-/** Strategy rule #3: pull 5m, 1h and 1d candles for a token in one shot. */
+/**
+ * Strategy rule #3: pull 5m, 1h and 1d candles for a token in one shot.
+ * Fails soft — a brand-new token often has little/no candle history yet,
+ * and the OHLCV endpoint may be rate-limited or plan-gated. Rather than
+ * killing the whole evaluation, an unavailable timeframe comes back empty
+ * and the AI scores with whatever data it has.
+ */
 export async function getCandles(mint: string): Promise<CandleSet> {
-  const [fiveMin, oneHour, oneDay] = await Promise.all([
-    getCandlesForTimeframe(mint, "5m"),
-    getCandlesForTimeframe(mint, "1h"),
-    getCandlesForTimeframe(mint, "1d"),
-  ]);
+  const safeFetch = async (tf: CandleTimeframe): Promise<Candle[]> => {
+    try {
+      return await getCandlesForTimeframe(mint, tf);
+    } catch (err) {
+      log.warn({ mint, tf, err: (err as Error).message }, "candle fetch failed, using empty set");
+      return [];
+    }
+  };
 
+  const [fiveMin, oneHour, oneDay] = await Promise.all([safeFetch("5m"), safeFetch("1h"), safeFetch("1d")]);
   return { mint, "5m": fiveMin, "1h": oneHour, "1d": oneDay };
 }
 
@@ -140,28 +138,6 @@ export async function getTokenOverview(mint: string): Promise<TokenOverview> {
     priceChange24hPct: data.priceChange24hPercent ?? 0,
     volume24hUsd: data.v24hUSD ?? 0,
     holders: data.holder ?? 0,
-  };
-}
-
-/**
- * Rug/safety signal used to hard-gate trades before any AI scoring happens.
- * Deliberately does NOT catch errors and default to "safe" — a failed
- * security lookup should block the trade (via the caller's evaluation
- * failing closed), not silently let an unvetted token through.
- */
-export async function getTokenSecurity(mint: string): Promise<TokenSecurityInfo> {
-  const url = `${env.BIRDEYE_BASE_URL}/defi/token_security?address=${mint}`;
-  const res = await birdeyeFetch<BirdeyeTokenSecurityResponse>(url);
-  const data = res.data ?? {};
-
-  return {
-    mint,
-    mintAuthority: data.mintAuthority ?? null,
-    freezeAuthority: data.freezeAuthority ?? null,
-    top10HolderPct: data.top10HolderPercent ?? 1,
-    creatorPct: data.creatorPercentage ?? 1,
-    isToken2022: data.isToken2022 ?? false,
-    transferFeeEnabled: data.transferFeeEnabled ?? false,
   };
 }
 
