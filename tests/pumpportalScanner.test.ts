@@ -42,6 +42,15 @@ describe("mapCreateEvent", () => {
     expect(token?.marketCapUsd).toBeCloseTo(1500, 5);
   });
 
+  it("computes market cap from reserves when marketCapSol is missing", () => {
+    // price = 30/1e9 SOL/token; mcap = price * 1e9 supply = 30 SOL = $4500
+    const token = mapCreateEvent(
+      { txType: "create", mint: "m", symbol: "SYM", vSolInBondingCurve: 30, vTokensInBondingCurve: 1_000_000_000 },
+      SOL_PRICE,
+    );
+    expect(token?.marketCapUsd).toBeCloseTo(30 * SOL_PRICE, 5);
+  });
+
   it("produces a market cap that the >$50k filter can evaluate", () => {
     // 400 SOL * $150 = $60k -> should clear the default $50k floor;
     // 100 SOL * $150 = $15k -> should not

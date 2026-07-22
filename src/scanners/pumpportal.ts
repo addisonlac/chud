@@ -31,6 +31,10 @@ interface PumpPortalCreateEvent {
  * bonding-curve reserves. Returns null for anything that isn't a valid new
  * token creation.
  */
+// pump.fun tokens have a fixed 1B total supply, so market cap can be
+// recomputed from the bonding-curve reserves if marketCapSol is missing.
+const PUMPFUN_TOTAL_SUPPLY = 1_000_000_000;
+
 export function mapCreateEvent(event: PumpPortalCreateEvent, solPriceUsd: number): PumpFunToken | null {
   if (event.txType !== "create" || !event.mint || !event.symbol) return null;
 
@@ -39,13 +43,18 @@ export function mapCreateEvent(event: PumpPortalCreateEvent, solPriceUsd: number
       ? event.vSolInBondingCurve / event.vTokensInBondingCurve
       : 0;
 
+  // Prefer the reported marketCapSol; fall back to price × total supply so a
+  // missing field doesn't silently zero out the market cap (which would
+  // make every token fail the >$50k filter).
+  const marketCapSol = event.marketCapSol ?? priceSol * PUMPFUN_TOTAL_SUPPLY;
+
   return {
     mint: event.mint,
     symbol: event.symbol,
     name: event.name ?? event.symbol,
     createdAt: Date.now(),
     creator: event.traderPublicKey ?? "",
-    marketCapUsd: (event.marketCapSol ?? 0) * solPriceUsd,
+    marketCapUsd: marketCapSol * solPriceUsd,
     priceUsd: priceSol * solPriceUsd,
   };
 }

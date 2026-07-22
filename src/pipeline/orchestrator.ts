@@ -58,6 +58,7 @@ export class TradingOrchestrator {
     rejectedLowConfidence: 0,
     signals: 0,
     tradesOpened: 0,
+    maxMcapUsdSeen: 0,
   };
 
   constructor(private readonly deps: OrchestratorDeps) {
@@ -105,6 +106,8 @@ export class TradingOrchestrator {
     log.info(
       {
         seen: f.seen,
+        mcapThresholdUsd: env.MIN_MARKET_CAP_USD,
+        biggestTokenSeenUsd: Math.round(f.maxMcapUsdSeen),
         passedMcapFilter: f.passedMcap,
         evaluated: f.evaluated,
         evalFailed: f.evalFailed,
@@ -124,11 +127,13 @@ export class TradingOrchestrator {
       rejectedLowConfidence: 0,
       signals: 0,
       tradesOpened: 0,
+      maxMcapUsdSeen: 0,
     };
   }
 
   private async handleNewToken(token: PumpFunToken): Promise<void> {
     this.funnel.seen++;
+    if (token.marketCapUsd > this.funnel.maxMcapUsdSeen) this.funnel.maxMcapUsdSeen = token.marketCapUsd;
     if (!passesMarketCapFilter(token)) return; // rule #2
     this.funnel.passedMcap++;
     if (this.deps.positionStore.hasOpenPosition(token.mint)) return;
