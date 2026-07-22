@@ -38,10 +38,27 @@ export interface OrchestratorDeps {
  * separate loop that enforces the two hard exit rules (stop loss, 48h
  * max age) on open positions.
  */
+const FUNNEL_LOG_INTERVAL_MS = 60_000;
+
 export class TradingOrchestrator {
   private readonly scanner: TokenScanner;
   private readonly semaphore = new Semaphore(MAX_CONCURRENT_EVALUATIONS);
   private positionMonitorTimer: NodeJS.Timeout | null = null;
+  private funnelTimer: NodeJS.Timeout | null = null;
+
+  // Visibility into where tokens drop out of the pipeline, logged
+  // periodically so "no trades" is explainable at a glance instead of a
+  // silent mystery.
+  private funnel = {
+    seen: 0,
+    passedMcap: 0,
+    evaluated: 0,
+    evalFailed: 0,
+    rejectedSafety: 0,
+    rejectedLowConfidence: 0,
+    signals: 0,
+    tradesOpened: 0,
+  };
 
   constructor(private readonly deps: OrchestratorDeps) {
     // Default to PumpPortal's websocket (reliable, bot-friendly); the
@@ -65,6 +82,7 @@ export class TradingOrchestrator {
     this.scanner.start();
 
     this.positionMonitorTimer = setInterval(() => void this.monitorPositions(), POSITION_MONITOR_INTERVAL_MS);
+    this.funnelTimer = setInterval(() => this.logFunnel(), FUNNEL_LOG_INTERVAL_MS);
 
     log.info({ mode: env.LIVE_TRADING ? "live" : "paper" }, "orchestrator started");
   }
@@ -72,17 +90,55 @@ export class TradingOrchestrator {
   stop(): void {
     this.scanner.stop();
     if (this.positionMonitorTimer) clearInterval(this.positionMonitorTimer);
+    if (this.funnelTimer) clearInterval(this.funnelTimer);
     this.positionMonitorTimer = null;
+    this.funnelTimer = null;
+  }
+
+  /**
+   * One-line snapshot of the last interval's token funnel. Read it to see
+   * where tokens drop out: almost all get cut at the >$50k market-cap
+   * filter (brand-new tokens are tiny), which is why trades are rare.
+   */
+  private logFunnel(): void {
+    const f = this.funnel;
+    log.info(
+      {
+        seen: f.seen,
+        passedMcapFilter: f.passedMcap,
+        evaluated: f.evaluated,
+        evalFailed: f.evalFailed,
+        rejectedBySafety: f.rejectedSafety,
+        rejectedLowConfidence: f.rejectedLowConfidence,
+        signals: f.signals,
+        tradesOpened: f.tradesOpened,
+      },
+      "token funnel (last interval)",
+    );
+    this.funnel = {
+      seen: 0,
+      passedMcap: 0,
+      evaluated: 0,
+      evalFailed: 0,
+      rejectedSafety: 0,
+      rejectedLowConfidence: 0,
+      signals: 0,
+      tradesOpened: 0,
+    };
   }
 
   private async handleNewToken(token: PumpFunToken): Promise<void> {
+    this.funnel.seen++;
     if (!passesMarketCapFilter(token)) return; // rule #2
+    this.funnel.passedMcap++;
     if (this.deps.positionStore.hasOpenPosition(token.mint)) return;
 
     const release = await this.semaphore.acquire();
     try {
+      this.funnel.evaluated++;
       await this.evaluateAndMaybeTrade(token);
     } catch (err) {
+      this.funnel.evalFailed++;
       log.error({ mint: token.mint, err: (err as Error).message }, "evaluation failed");
     } finally {
       release();
@@ -98,6 +154,7 @@ export class TradingOrchestrator {
 
     const safety = assessTokenSafety(security, overview, defaultRugCheckConfig());
     if (!safety.passed) {
+      this.funnel.rejectedSafety++;
       log.info({ mint: token.mint, symbol: token.symbol, reasons: safety.reasons }, "rejected by rug/safety check");
       return;
     }
@@ -128,9 +185,11 @@ export class TradingOrchestrator {
     const scoring = await scoreTrade(payload); // rule #6: Opus scores the trade
 
     if (scoring.direction !== "long" || !meetsConfidenceThreshold(scoring.confidence)) {
+      this.funnel.rejectedLowConfidence++;
       log.debug({ mint: token.mint, confidence: scoring.confidence, direction: scoring.direction }, "no trade");
       return;
     }
+    this.funnel.signals++;
 
     const signal: TradeSignal = {
       mint: token.mint,
@@ -177,6 +236,7 @@ export class TradingOrchestrator {
       stopLossPriceUsd: sizing.stopLossPriceUsd,
       maxAgeHours: config.maxPositionAgeHours,
     });
+    this.funnel.tradesOpened++;
     await this.deps.telegram.notifyPositionOpened(position);
   }
 
