@@ -1,9 +1,21 @@
 import { PublicKey } from "@solana/web3.js";
 import { getConnection } from "../execution/wallet.js";
 import { childLogger } from "../utils/logger.js";
+import { env } from "../config/env.js";
+import { sleep } from "../utils/http.js";
 import type { TokenSecurityInfo } from "../types/index.js";
 
 const log = childLogger("onchain-security");
+
+// Global throttle so the free public Solana RPC (heavily rate-limited)
+// isn't slammed with security-check calls. Serializes calls with a minimum
+// gap; a better SOLANA_RPC_URL (e.g. free Helius) lets you lower the gap.
+let rpcChain: Promise<void> = Promise.resolve();
+function throttleRpc(): Promise<void> {
+  const next = rpcChain.then(() => sleep(env.SOLANA_RPC_MIN_REQUEST_INTERVAL_MS));
+  rpcChain = next.catch(() => undefined);
+  return next;
+}
 
 const TOKEN_2022_PROGRAM = "spl-token-2022";
 
@@ -59,10 +71,10 @@ export async function getTokenSecurity(mint: string): Promise<TokenSecurityInfo>
   const connection = getConnection();
   const mintPubkey = new PublicKey(mint);
 
-  const [accountInfo, largest] = await Promise.all([
-    connection.getParsedAccountInfo(mintPubkey),
-    connection.getTokenLargestAccounts(mintPubkey),
-  ]);
+  await throttleRpc();
+  const accountInfo = await connection.getParsedAccountInfo(mintPubkey);
+  await throttleRpc();
+  const largest = await connection.getTokenLargestAccounts(mintPubkey);
 
   const data = accountInfo.value?.data;
   if (!data || data instanceof Buffer || !("parsed" in data)) {

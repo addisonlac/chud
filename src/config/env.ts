@@ -28,11 +28,13 @@ const envSchema = z.object({
   // rate limit (raise if you still see 429s; lower on a paid plan).
   BIRDEYE_MIN_REQUEST_INTERVAL_MS: numFromString(1200),
 
-  // Token discovery source. "pumpportal" (default) streams new pump.fun
-  // tokens over a WebSocket built for bots — reliable and free. "pumpfun"
-  // polls pump.fun's unofficial HTTP endpoint, which sits behind Cloudflare
-  // and frequently returns HTTP 530/403 to non-browser traffic.
-  SCANNER_SOURCE: z.enum(["pumpportal", "pumpfun"]).default("pumpportal"),
+  // Token discovery source:
+  //  "pumpportal" (default) — brand-new pump.fun token creations (~$5k).
+  //  "graduated" — tokens graduating to a DEX (~$69k), the established
+  //     ">$50k runners" the original strategy targets. Far lower volume,
+  //     so it also sidesteps the free-RPC/Birdeye rate limits.
+  //  "pumpfun" — pump.fun's Cloudflare-gated HTTP endpoint (unreliable).
+  SCANNER_SOURCE: z.enum(["pumpportal", "graduated", "pumpfun"]).default("pumpportal"),
   PUMPPORTAL_WS_URL: z.string().default("wss://pumpportal.fun/api/data"),
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api.pump.fun"),
   PUMPFUN_SCAN_INTERVAL_MS: numFromString(200),
@@ -45,6 +47,10 @@ const envSchema = z.object({
   // deliberately conservative to reduce throttling.
   WHALE_TRACKING_ENABLED: boolFromString(false),
   WHALE_POLL_INTERVAL_MS: numFromString(60_000),
+  // Minimum gap between Solana RPC calls (the on-chain safety check uses
+  // them). The free public RPC rate-limits hard; raise if you see 429s, or
+  // point SOLANA_RPC_URL at a free Helius RPC key for much higher limits.
+  SOLANA_RPC_MIN_REQUEST_INTERVAL_MS: numFromString(400),
 
   NEWSAPI_KEY: z.string().optional().default(""),
   NEWSAPI_BASE_URL: z.string().default("https://newsapi.org/v2"),

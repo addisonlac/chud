@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapCreateEvent } from "../src/scanners/pumpportal.js";
+import { mapCreateEvent, mapMigrationEvent } from "../src/scanners/pumpportal.js";
 
 const SOL_PRICE = 150;
 
@@ -58,5 +58,29 @@ describe("mapCreateEvent", () => {
     const small = mapCreateEvent({ txType: "create", mint: "m", symbol: "S", marketCapSol: 100 }, SOL_PRICE);
     expect(big?.marketCapUsd).toBeGreaterThan(50_000);
     expect(small?.marketCapUsd).toBeLessThan(50_000);
+  });
+});
+
+describe("mapMigrationEvent", () => {
+  it("maps a migration event and clears the $50k filter via the graduation sentinel", () => {
+    const token = mapMigrationEvent({ mint: "GradMint111", symbol: "GRAD" }, SOL_PRICE);
+    expect(token).not.toBeNull();
+    expect(token?.mint).toBe("GradMint111");
+    expect(token?.symbol).toBe("GRAD");
+    expect(token?.marketCapUsd).toBeGreaterThan(50_000); // sentinel ~$69k
+  });
+
+  it("uses the event marketCapSol when present", () => {
+    const token = mapMigrationEvent({ mint: "m", symbol: "S", marketCapSol: 500 }, SOL_PRICE);
+    expect(token?.marketCapUsd).toBeCloseTo(500 * SOL_PRICE, 5);
+  });
+
+  it("falls back to a mint-prefix symbol when none is provided", () => {
+    const token = mapMigrationEvent({ mint: "ABCDEF123456" }, SOL_PRICE);
+    expect(token?.symbol).toBe("ABCDEF");
+  });
+
+  it("returns null without a mint", () => {
+    expect(mapMigrationEvent({ symbol: "X" }, SOL_PRICE)).toBeNull();
   });
 });
