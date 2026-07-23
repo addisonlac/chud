@@ -14,7 +14,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:scanner": "tsx scripts/test-scanner.ts"
+    "test:scanner": "tsx scripts/test-scanner.ts",
+    "backtest": "tsx scripts/backtest.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.4",
