@@ -71,11 +71,11 @@ export async function getTokenSecurity(mint: string): Promise<TokenSecurityInfo>
   const connection = getConnection();
   const mintPubkey = new PublicKey(mint);
 
+  // Critical check: the mint account (mint/freeze authority). This is a
+  // light getAccountInfo call. If it fails, the whole evaluation fails
+  // closed — we won't trade a token we can't vet at all.
   await throttleRpc();
   const accountInfo = await connection.getParsedAccountInfo(mintPubkey);
-  await throttleRpc();
-  const largest = await connection.getTokenLargestAccounts(mintPubkey);
-
   const data = accountInfo.value?.data;
   if (!data || data instanceof Buffer || !("parsed" in data)) {
     throw new Error(`mint ${mint} is not a parseable SPL token mint account`);
@@ -84,7 +84,20 @@ export async function getTokenSecurity(mint: string): Promise<TokenSecurityInfo>
   const info = (data.parsed?.info ?? {}) as ParsedMintInfo;
   const decimals = info.decimals ?? 0;
   const totalUiSupply = info.supply ? Number(info.supply) / 10 ** decimals : 0;
-  const top10UiAmount = largest.value.slice(0, 10).reduce((sum, acc) => sum + (acc.uiAmount ?? 0), 0);
+
+  // Best-effort check: holder concentration via getTokenLargestAccounts.
+  // The public RPC throttles this specific method hardest ("Too many
+  // requests for a specific RPC call"), so if it fails we skip the
+  // concentration check (treat as 0/pass) rather than failing the whole
+  // evaluation. Use a real SOLANA_RPC_URL to get this check back reliably.
+  let top10UiAmount = 0;
+  try {
+    await throttleRpc();
+    const largest = await connection.getTokenLargestAccounts(mintPubkey);
+    top10UiAmount = largest.value.slice(0, 10).reduce((sum, acc) => sum + (acc.uiAmount ?? 0), 0);
+  } catch (err) {
+    log.warn({ mint, err: (err as Error).message }, "holder concentration unavailable (RPC limit), skipping that check");
+  }
 
   const result = parseTokenSecurity({ mint, program: data.program, info, top10UiAmount, totalUiSupply });
   log.debug({ mint, mintAuthRevoked: !result.mintAuthority, top10Pct: result.top10HolderPct }, "on-chain security read");
