@@ -10,7 +10,14 @@ let cachedConnection: Connection | null = null;
 
 export function getConnection(): Connection {
   if (!cachedConnection) {
-    cachedConnection = new Connection(env.SOLANA_RPC_URL, "confirmed");
+    // disableRetryOnRateLimit: on a rate-limited RPC, fail fast and let the
+    // caller skip the token, instead of web3.js spamming "Server responded
+    // with 429... Retrying" for seconds per call. Use a real RPC
+    // (SOLANA_RPC_URL) to avoid the 429s entirely.
+    cachedConnection = new Connection(env.SOLANA_RPC_URL, {
+      commitment: "confirmed",
+      disableRetryOnRateLimit: true,
+    });
   }
   return cachedConnection;
 }
