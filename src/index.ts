@@ -8,13 +8,18 @@ import { WhaleList } from "./whales/whaleList.js";
 import { SolanaWhalePoller } from "./whales/solanaWhalePoller.js";
 import { TradingOrchestrator } from "./pipeline/orchestrator.js";
 import { createServer } from "./server/webhookServer.js";
-import { getWalletKeypair, getSolBalance } from "./execution/wallet.js";
+import { getWalletKeypair, getSolBalance, getConnection } from "./execution/wallet.js";
 import { TelegramNotifier } from "./notify/telegram.js";
 import { TelegramCommandListener, formatStatusReply, formatStatsReply, formatPositionsReply } from "./notify/telegramCommands.js";
 import { marketContext } from "./data/marketContext.js";
 import { getTrendingTokenMints } from "./data/birdeye.js";
 
 const log = childLogger("bootstrap");
+
+/** Hide the api-key query param so it never lands in logs. */
+function redactRpcUrl(url: string): string {
+  return url.replace(/api-key=[^&]+/i, "api-key=***");
+}
 
 async function main(): Promise<void> {
   const missing = assertRequiredConfig();
@@ -26,6 +31,19 @@ async function main(): Promise<void> {
     log.warn("LIVE_TRADING=true — this process WILL sign and submit real Jupiter swaps with real funds.");
   } else {
     log.info("Running in PAPER mode — no real trades will be signed or submitted.");
+  }
+
+  // Fail loudly at boot if the Solana RPC is unreachable / the key is bad,
+  // instead of silently failing the safety check on every token.
+  try {
+    const slot = await getConnection().getSlot();
+    log.info({ slot, rpc: redactRpcUrl(env.SOLANA_RPC_URL) }, "Solana RPC OK");
+  } catch (err) {
+    log.error(
+      { err: (err as Error).message, rpc: redactRpcUrl(env.SOLANA_RPC_URL) },
+      "Solana RPC check FAILED — token safety checks will fail on every token. " +
+        "Fix SOLANA_RPC_URL (a 401 'invalid api key' means your Helius URL/key is wrong).",
+    );
   }
 
   const positionStore = new PositionStore();
