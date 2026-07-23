@@ -1,9 +1,21 @@
 import { PublicKey } from "@solana/web3.js";
 import { getConnection } from "../execution/wallet.js";
 import { childLogger } from "../utils/logger.js";
+import { env } from "../config/env.js";
+import { sleep } from "../utils/http.js";
 import type { TokenSecurityInfo } from "../types/index.js";
 
 const log = childLogger("onchain-security");
+
+// Global throttle so the free public Solana RPC (heavily rate-limited)
+// isn't slammed with security-check calls. Serializes calls with a minimum
+// gap; a better SOLANA_RPC_URL (e.g. free Helius) lets you lower the gap.
+let rpcChain: Promise<void> = Promise.resolve();
+function throttleRpc(): Promise<void> {
+  const next = rpcChain.then(() => sleep(env.SOLANA_RPC_MIN_REQUEST_INTERVAL_MS));
+  rpcChain = next.catch(() => undefined);
+  return next;
+}
 
 const TOKEN_2022_PROGRAM = "spl-token-2022";
 
@@ -59,11 +71,11 @@ export async function getTokenSecurity(mint: string): Promise<TokenSecurityInfo>
   const connection = getConnection();
   const mintPubkey = new PublicKey(mint);
 
-  const [accountInfo, largest] = await Promise.all([
-    connection.getParsedAccountInfo(mintPubkey),
-    connection.getTokenLargestAccounts(mintPubkey),
-  ]);
-
+  // Critical check: the mint account (mint/freeze authority). This is a
+  // light getAccountInfo call. If it fails, the whole evaluation fails
+  // closed — we won't trade a token we can't vet at all.
+  await throttleRpc();
+  const accountInfo = await connection.getParsedAccountInfo(mintPubkey);
   const data = accountInfo.value?.data;
   if (!data || data instanceof Buffer || !("parsed" in data)) {
     throw new Error(`mint ${mint} is not a parseable SPL token mint account`);
@@ -72,7 +84,20 @@ export async function getTokenSecurity(mint: string): Promise<TokenSecurityInfo>
   const info = (data.parsed?.info ?? {}) as ParsedMintInfo;
   const decimals = info.decimals ?? 0;
   const totalUiSupply = info.supply ? Number(info.supply) / 10 ** decimals : 0;
-  const top10UiAmount = largest.value.slice(0, 10).reduce((sum, acc) => sum + (acc.uiAmount ?? 0), 0);
+
+  // Best-effort check: holder concentration via getTokenLargestAccounts.
+  // The public RPC throttles this specific method hardest ("Too many
+  // requests for a specific RPC call"), so if it fails we skip the
+  // concentration check (treat as 0/pass) rather than failing the whole
+  // evaluation. Use a real SOLANA_RPC_URL to get this check back reliably.
+  let top10UiAmount = 0;
+  try {
+    await throttleRpc();
+    const largest = await connection.getTokenLargestAccounts(mintPubkey);
+    top10UiAmount = largest.value.slice(0, 10).reduce((sum, acc) => sum + (acc.uiAmount ?? 0), 0);
+  } catch (err) {
+    log.warn({ mint, err: (err as Error).message }, "holder concentration unavailable (RPC limit), skipping that check");
+  }
 
   const result = parseTokenSecurity({ mint, program: data.program, info, top10UiAmount, totalUiSupply });
   log.debug({ mint, mintAuthRevoked: !result.mintAuthority, top10Pct: result.top10HolderPct }, "on-chain security read");

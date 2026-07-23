@@ -63,12 +63,16 @@ export class TradingOrchestrator {
   };
 
   constructor(private readonly deps: OrchestratorDeps) {
-    // Default to PumpPortal's websocket (reliable, bot-friendly); the
-    // pump.fun HTTP poller stays available via SCANNER_SOURCE=pumpfun.
-    this.scanner =
-      env.SCANNER_SOURCE === "pumpfun"
-        ? new PumpFunScanner()
-        : new PumpPortalScanner(() => marketContext.getSolPriceUsd());
+    // Default to PumpPortal's new-token websocket. "graduated" watches
+    // tokens migrating to a DEX (the >$50k runner strategy); "pumpfun" is
+    // the HTTP fallback.
+    if (env.SCANNER_SOURCE === "pumpfun") {
+      this.scanner = new PumpFunScanner();
+    } else if (env.SCANNER_SOURCE === "graduated") {
+      this.scanner = new PumpPortalScanner(() => marketContext.getSolPriceUsd(), { mode: "migration" });
+    } else {
+      this.scanner = new PumpPortalScanner(() => marketContext.getSolPriceUsd(), { mode: "new" });
+    }
   }
 
   start(): void {

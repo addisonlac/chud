@@ -59,12 +59,54 @@ export function mapCreateEvent(event: PumpPortalCreateEvent, solPriceUsd: number
   };
 }
 
+/**
+ * A "migration" event from PumpPortal's subscribeMigration stream — fired
+ * when a token completes its bonding curve and graduates to a DEX
+ * (~$69k market cap). These are the established "runners" the >$50k
+ * strategy targets. Event metadata is sparse, so real market data is
+ * fetched from Birdeye downstream in the pipeline.
+ */
+interface PumpPortalMigrationEvent {
+  txType?: string;
+  mint?: string;
+  symbol?: string;
+  name?: string;
+  marketCapSol?: number;
+  pool?: string;
+}
+
+// pump.fun tokens graduate at roughly this market cap; used as a sentinel
+// so migrated tokens clear the >$50k filter when the event omits mcap. The
+// real value is fetched from Birdeye during evaluation.
+const GRADUATION_MCAP_USD_SENTINEL = 69_000;
+
+export function mapMigrationEvent(event: PumpPortalMigrationEvent, solPriceUsd: number): PumpFunToken | null {
+  if (!event.mint) return null;
+
+  const marketCapUsd = event.marketCapSol ? event.marketCapSol * solPriceUsd : GRADUATION_MCAP_USD_SENTINEL;
+  const symbol = event.symbol ?? event.mint.slice(0, 6);
+
+  return {
+    mint: event.mint,
+    symbol,
+    name: event.name ?? symbol,
+    createdAt: Date.now(),
+    creator: "",
+    marketCapUsd,
+    priceUsd: 0, // real price comes from Birdeye during evaluation
+  };
+}
+
 const INITIAL_RECONNECT_MS = 1000;
 const MAX_RECONNECT_MS = 30_000;
+
+/** "new" = brand-new token creations; "migration" = tokens graduating to a DEX (~$69k). */
+export type PumpPortalMode = "new" | "migration";
 
 export interface PumpPortalScannerOptions {
   url?: string;
   maxSeenMints?: number;
+  mode?: PumpPortalMode;
 }
 
 export declare interface PumpPortalScanner {
@@ -73,15 +115,17 @@ export declare interface PumpPortalScanner {
 }
 
 /**
- * Streams newly created pump.fun tokens from PumpPortal's free WebSocket
- * (wss://pumpportal.fun/api/data). Unlike pump.fun's Cloudflare-gated HTTP
- * endpoint, this is built for programmatic consumers. Auto-reconnects with
- * exponential backoff, and re-subscribes on every (re)connect since the
- * subscription is per-connection.
+ * Streams pump.fun tokens from PumpPortal's free WebSocket
+ * (wss://pumpportal.fun/api/data), either brand-new creations
+ * (mode "new", subscribeNewToken) or tokens graduating to a DEX
+ * (mode "migration", subscribeMigration — the established >$50k "runners").
+ * Auto-reconnects with exponential backoff and re-subscribes on every
+ * (re)connect since the subscription is per-connection.
  */
 export class PumpPortalScanner extends EventEmitter implements TokenScanner {
   private readonly url: string;
   private readonly maxSeenMints: number;
+  private readonly mode: PumpPortalMode;
   private ws: WebSocket | null = null;
   private seenMints = new Set<string>();
   private seenOrder: string[] = [];
@@ -97,6 +141,7 @@ export class PumpPortalScanner extends EventEmitter implements TokenScanner {
     super();
     this.url = options.url ?? env.PUMPPORTAL_WS_URL;
     this.maxSeenMints = options.maxSeenMints ?? 5000;
+    this.mode = options.mode ?? "new";
   }
 
   start(): void {
@@ -124,15 +169,16 @@ export class PumpPortalScanner extends EventEmitter implements TokenScanner {
 
   private connect(): void {
     if (this.stopped) return;
-    log.info({ url: this.url }, "connecting to PumpPortal new-token stream");
+    log.info({ url: this.url, mode: this.mode }, "connecting to PumpPortal stream");
 
     const ws = new WebSocket(this.url);
     this.ws = ws;
 
     ws.on("open", () => {
       this.reconnectDelay = INITIAL_RECONNECT_MS;
-      ws.send(JSON.stringify({ method: "subscribeNewToken" }));
-      log.info("subscribed to PumpPortal new-token stream");
+      const method = this.mode === "migration" ? "subscribeMigration" : "subscribeNewToken";
+      ws.send(JSON.stringify({ method }));
+      log.info({ mode: this.mode }, `subscribed to PumpPortal ${method} stream`);
     });
 
     ws.on("message", (data: WebSocket.RawData) => {
@@ -162,21 +208,23 @@ export class PumpPortalScanner extends EventEmitter implements TokenScanner {
   }
 
   private async handleMessage(raw: string): Promise<void> {
-    let event: PumpPortalCreateEvent;
+    let event: PumpPortalCreateEvent & PumpPortalMigrationEvent;
     try {
-      event = JSON.parse(raw) as PumpPortalCreateEvent;
+      event = JSON.parse(raw) as PumpPortalCreateEvent & PumpPortalMigrationEvent;
     } catch {
       return; // ignore non-JSON frames (e.g. the initial subscribe ack)
     }
 
-    if (event.txType !== "create" || !event.mint) return;
-    if (this.seenMints.has(event.mint)) return;
+    if (!event.mint || this.seenMints.has(event.mint)) return;
 
     // Refresh SOL price opportunistically (cached upstream, so this is cheap)
     // so USD market caps stay roughly current across a long-lived connection.
     await this.refreshSolPrice();
 
-    const token = mapCreateEvent(event, this.solPriceUsd);
+    const token =
+      this.mode === "migration"
+        ? mapMigrationEvent(event, this.solPriceUsd)
+        : mapCreateEvent(event, this.solPriceUsd);
     if (!token) return;
 
     this.markSeen(token.mint);
