@@ -17,10 +17,11 @@ via Jupiter under a fixed set of risk rules.
 
 ## Strategy
 
-1. **Scan** — stream newly created pump.fun tokens in real time via
-   PumpPortal's WebSocket (default), or poll pump.fun's HTTP endpoint
-   (`SCANNER_SOURCE=pumpfun`).
-2. **Filter** — only tokens with market cap > $50k move forward.
+1. **Scan** — stream pump.fun tokens graduating to a DEX (`SCANNER_SOURCE=
+   graduated`, default — the tokens with real Birdeye data that can actually
+   be evaluated), brand-new creations (`pumpportal`), or the HTTP endpoint
+   (`pumpfun`), all via PumpPortal's free WebSocket.
+2. **Filter** — only tokens above `MIN_MARKET_CAP_USD` move forward.
 3. **Rug/safety gate** — reject anything with an un-revoked mint/freeze
    authority, excessive holder/creator concentration, a Token-2022
    transfer-fee extension, or thin liquidity, *before* spending any
@@ -33,8 +34,16 @@ via Jupiter under a fixed set of risk rules.
 7. **Scoring** — merge token + security + candles + sentiment + whale
    activity + portfolio state into one payload and score it with a
    free-tier Groq-hosted model (default: Llama 3.3 70B).
-8. **Execute** — if confidence > 72%, generate a signal and auto-execute a
-   buy via Jupiter, sized by the risk manager.
+8. **Execute** — if confidence > `CONFIDENCE_THRESHOLD`, generate a signal
+   and auto-execute a buy via Jupiter, sized by the risk manager.
+
+> **Default posture is permissive paper data-collection.** The shipped
+> defaults (`SCANNER_SOURCE=graduated`, `MIN_MARKET_CAP_USD=25000`,
+> `CONFIDENCE_THRESHOLD=0.60`, `MIN_LIQUIDITY_USD=4000`) are deliberately
+> loose so the bot actually takes trades and `/stats` accumulates real
+> calibration data. The point is *exposure to learn from*, not paper profit.
+> The hard rug checks (authorities revoked, holder/creator concentration)
+> stay strict. Tighten the gates (e.g. `50000` / `0.72`) before going live.
 
 ### Risk rules (enforced in `src/risk/riskManager.ts`)
 
@@ -166,7 +175,7 @@ src/
   config/env.ts          env var loading + validation (zod)
   types/index.ts          shared types across the pipeline
   scanners/
-    pumpportal.ts          new-token stream via PumpPortal websocket (default)
+    pumpportal.ts          PumpPortal websocket: graduated (default) or new-token stream
     pumpfun.ts             HTTP poller for new pump.fun tokens (fallback)
     types.ts                shared TokenScanner interface
     filters.ts              market-cap filter (rule #2)
@@ -203,12 +212,12 @@ src/
 
 ```
 PumpPortalScanner (websocket stream)  [or PumpFunScanner HTTP poll]
-  -> passesMarketCapFilter (>$50k)
+  -> passesMarketCapFilter (> MIN_MARKET_CAP_USD, default $25k)
   -> [Birdeye overview + token_security] -> assessTokenSafety (hard gate, fails closed)
   -> [Birdeye candles] + [NewsAPI -> Sentiment(Groq)] + [WhaleTracker activity]
   -> merged ScoringPayload (incl. security snapshot)
   -> scoreTrade (Groq) -> confidence, direction
-  -> if confidence > 72% && direction == long:
+  -> if confidence > CONFIDENCE_THRESHOLD (default 0.60) && direction == long:
        -> sizePosition (risk manager)
        -> executeBuy (Jupiter, paper|live)
        -> PositionStore.openPosition (peakPriceUsd = entryPriceUsd)
@@ -337,24 +346,28 @@ is unaffected either way, and nothing about this integration touches
 
 ### Token discovery sources
 
-The bot has two interchangeable ways to discover new pump.fun tokens,
-selected by `SCANNER_SOURCE`:
+The bot has three interchangeable ways to discover tokens, selected by
+`SCANNER_SOURCE`:
 
-- **`pumpportal` (default)** — `src/scanners/pumpportal.ts` subscribes to
-  [PumpPortal](https://pumpportal.fun)'s free real-time WebSocket
-  (`subscribeNewToken`). It's built for programmatic consumers, so it
-  isn't subject to the Cloudflare bot-blocking that plagues pump.fun's own
-  endpoint. Auto-reconnects with exponential backoff. Recommended.
+- **`graduated` (default)** — `src/scanners/pumpportal.ts` in `migration`
+  mode subscribes to PumpPortal's `subscribeMigration` stream: tokens that
+  completed their bonding curve and graduated to a DEX (~$69k). These are
+  the tokens the pipeline can actually *evaluate and trade* — they're on a
+  DEX so Birdeye has real OHLCV/liquidity for them, their mint/freeze
+  authorities are usually revoked, and the lower volume dodges the free
+  RPC/Birdeye rate limits. Recommended.
+- **`pumpportal`** — the same scanner in `new` mode
+  (`subscribeNewToken`): brand-new creations (~$5k). High volume but tiny,
+  no Birdeye OHLCV, mostly rugs. Use only if you specifically want new-mint
+  exposure and accept that most of it can't be scored well.
 - **`pumpfun`** — `src/scanners/pumpfun.ts` polls pump.fun's unofficial
-  `frontend-api` HTTP endpoint. This endpoint sits behind Cloudflare and
-  frequently returns **HTTP 530/403** to non-browser traffic; the scanner
-  sends browser-like headers to try to get past it, but this is
-  unreliable. Only use it if PumpPortal is down.
+  `frontend-api` HTTP endpoint. Sits behind Cloudflare and frequently
+  returns **HTTP 530/403** to non-browser traffic; unreliable. Last resort.
 
-Both emit the same `PumpFunToken` shape, so the rest of the pipeline
-doesn't care which is active. If you see no tokens flowing (nothing ever
-reaches the market-cap filter), the discovery source is almost always the
-cause — check the scanner logs.
+All emit the same `PumpFunToken` shape, so the rest of the pipeline doesn't
+care which is active. If you see no tokens flowing (nothing ever reaches the
+market-cap filter), the discovery source is almost always the cause — check
+the scanner logs.
 
 ## Running
 

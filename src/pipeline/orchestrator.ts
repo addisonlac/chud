@@ -185,7 +185,11 @@ export class TradingOrchestrator {
     const whaleActivity = this.deps.whaleTracker.getActivity(token.mint, 60); // rule #5
 
     const openPositions = this.deps.positionStore.getOpen();
-    const openPositionsValueUsd = openPositions.reduce((sum, p) => sum + p.costBasisUsd, 0);
+    // Deployed value at cost = remaining tokens × entry price. Using
+    // costBasisUsd here would double-count after a partial take-profit: the
+    // scale-out proceeds are already back in the SOL balance, but costBasisUsd
+    // stays at the original, so totalValueUsd would inflate.
+    const openPositionsValueUsd = openPositions.reduce((sum, p) => sum + p.quantityTokens * p.entryPriceUsd, 0);
     const portfolioSnapshot = this.deps.portfolio.getSnapshot(openPositionsValueUsd, solPriceUsd, openPositions.length);
 
     const payload: ScoringPayload = {
@@ -224,7 +228,11 @@ export class TradingOrchestrator {
   private async executeSignal(signal: TradeSignal, solPriceUsd: number): Promise<void> {
     const config = defaultRiskConfig();
     const openPositions = this.deps.positionStore.getOpen();
-    const openPositionsValueUsd = openPositions.reduce((sum, p) => sum + p.costBasisUsd, 0);
+    // Deployed value at cost = remaining tokens × entry price. Using
+    // costBasisUsd here would double-count after a partial take-profit: the
+    // scale-out proceeds are already back in the SOL balance, but costBasisUsd
+    // stays at the original, so totalValueUsd would inflate.
+    const openPositionsValueUsd = openPositions.reduce((sum, p) => sum + p.quantityTokens * p.entryPriceUsd, 0);
     const snapshot = this.deps.portfolio.getSnapshot(openPositionsValueUsd, solPriceUsd, openPositions.length);
 
     const sizing = sizePosition(snapshot, signal.entryPriceUsd, solPriceUsd, config);

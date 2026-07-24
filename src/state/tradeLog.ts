@@ -8,8 +8,9 @@ const log = childLogger("trade-log");
 const DATA_DIR = path.resolve("data");
 const TRADE_LOG_PATH = path.join(DATA_DIR, "trade-log.json");
 
-/** Confidence is bucketed rather than treated as continuous — with a hard >72% gate, all logged trades cluster in [0.72, 1.0], so coarse buckets are what's actually readable. */
+/** Confidence is bucketed rather than treated as continuous — coarse buckets are what's actually readable. The lowest bucket tracks the permissive paper gate (CONFIDENCE_THRESHOLD default 0.60); tighten the gate and the low bucket simply stays empty. */
 const CALIBRATION_BUCKETS: { min: number; max: number; label: string }[] = [
+  { min: 0.6, max: 0.72, label: "0.60-0.72" },
   { min: 0.72, max: 0.8, label: "0.72-0.80" },
   { min: 0.8, max: 0.9, label: "0.80-0.90" },
   { min: 0.9, max: 1.01, label: "0.90-1.00" },
