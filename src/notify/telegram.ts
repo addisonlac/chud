@@ -40,6 +40,20 @@ export function formatPositionOpenedMessage(position: Position): string {
   ].join("\n");
 }
 
+export function formatPartialTakeProfitMessage(
+  symbol: string,
+  soldFraction: number,
+  priceUsd: number,
+  realizedPnlUsd: number,
+): string {
+  return [
+    `💰 TOOK PROFIT $${symbol} — sold ${(soldFraction * 100).toFixed(0)}%`,
+    `Price: $${formatPrice(priceUsd)}`,
+    `Banked: $${realizedPnlUsd >= 0 ? "+" : ""}${realizedPnlUsd.toFixed(2)}`,
+    `Rest rides the trailing stop (floor now at breakeven).`,
+  ].join("\n");
+}
+
 export function formatPositionClosedMessage(entry: TradeLogEntry): string {
   const icon = entry.won ? "🟢 WIN" : "🔴 LOSS";
   return [
@@ -116,6 +130,15 @@ export class TelegramNotifier {
 
   async notifyPositionClosed(entry: TradeLogEntry): Promise<void> {
     if (this.enabled) await sendTelegramMessage(formatPositionClosedMessage(entry));
+  }
+
+  async notifyPartialTakeProfit(
+    symbol: string,
+    soldFraction: number,
+    priceUsd: number,
+    realizedPnlUsd: number,
+  ): Promise<void> {
+    if (this.enabled) await sendTelegramMessage(formatPartialTakeProfitMessage(symbol, soldFraction, priceUsd, realizedPnlUsd));
   }
 
   async notifyExecutionError(context: string, symbol: string, error: string): Promise<void> {

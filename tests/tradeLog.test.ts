@@ -126,6 +126,22 @@ describe("toTradeLogEntry", () => {
     expect(entry.exitReason).toBe("trailing_stop");
   });
 
+  it("includes banked partial-take-profit gains in pnlPct, not just the final exit price", () => {
+    // A scaled winner: sold half at the target (banked), the rest trailed out
+    // lower. realizedPnlUsd is the blended total; pnlPct must reflect it
+    // (return on the original $100 cost basis), not just (exit − entry)/entry.
+    const scaled = makeClosedPosition({
+      entryPriceUsd: 1,
+      exitPriceUsd: 1.1, // remainder exited only +10%…
+      costBasisUsd: 100,
+      realizedScaleOutPnlUsd: 30, // …but +30 was already banked at the take-profit
+      realizedPnlUsd: 35, // 30 banked + 5 on the remainder
+    });
+    const entry = toTradeLogEntry(scaled);
+    expect(entry.pnlPct).toBeCloseTo(0.35, 5); // 35 / 100, not 0.10
+    expect(entry.won).toBe(true);
+  });
+
   it("throws for a position that isn't actually closed", () => {
     const open = makeClosedPosition({ status: "open", exitPriceUsd: undefined, exitTimestamp: undefined, exitReason: undefined, realizedPnlUsd: undefined });
     expect(() => toTradeLogEntry(open)).toThrow();

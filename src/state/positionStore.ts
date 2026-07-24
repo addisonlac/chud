@@ -65,6 +65,40 @@ export class PositionStore {
     return position;
   }
 
+  /**
+   * Partial take-profit: sells `sellFraction` of the position's *current*
+   * remaining tokens at `priceUsd`, banks the realized PnL, raises the floor
+   * stop to at least breakeven, and keeps the position open so the remainder
+   * rides the trailing stop. Fires at most once (tookPartialProfit guards
+   * the caller). Returns the sold quantity + banked PnL, or null if the
+   * position is missing/closed/empty.
+   */
+  async scaleOutPosition(
+    id: string,
+    sellFraction: number,
+    priceUsd: number,
+  ): Promise<{ position: Position; soldQuantityTokens: number; realizedPnlUsd: number } | null> {
+    const position = this.positions.find((p) => p.id === id && p.status === "open");
+    if (!position || sellFraction <= 0 || position.quantityTokens <= 0) return null;
+
+    const soldQuantityTokens = position.quantityTokens * Math.min(sellFraction, 1);
+    const realizedPnlUsd = (priceUsd - position.entryPriceUsd) * soldQuantityTokens;
+
+    position.quantityTokens -= soldQuantityTokens;
+    position.scaledOutQuantityTokens = (position.scaledOutQuantityTokens ?? 0) + soldQuantityTokens;
+    position.realizedScaleOutPnlUsd = (position.realizedScaleOutPnlUsd ?? 0) + realizedPnlUsd;
+    position.tookPartialProfit = true;
+    // Can't give back the banked win: floor the remainder at breakeven.
+    position.stopLossPriceUsd = Math.max(position.stopLossPriceUsd, position.entryPriceUsd);
+
+    await this.persist();
+    log.info(
+      { mint: position.mint, symbol: position.symbol, soldQuantityTokens, realizedPnlUsd },
+      "partial take-profit: scaled out, remainder rides the trailing stop",
+    );
+    return { position, soldQuantityTokens, realizedPnlUsd };
+  }
+
   async openPosition(params: OpenPositionParams): Promise<Position> {
     const position: Position = {
       id: randomUUID(),
@@ -79,6 +113,9 @@ export class PositionStore {
       stopLossPriceUsd: params.stopLossPriceUsd,
       peakPriceUsd: params.entryPriceUsd,
       maxAgeHours: params.maxAgeHours,
+      tookPartialProfit: false,
+      scaledOutQuantityTokens: 0,
+      realizedScaleOutPnlUsd: 0,
       signal: params.signal,
     };
 
@@ -96,7 +133,10 @@ export class PositionStore {
     position.exitPriceUsd = exitPriceUsd;
     position.exitTimestamp = Date.now();
     position.exitReason = exitReason;
-    position.realizedPnlUsd = (exitPriceUsd - position.entryPriceUsd) * position.quantityTokens;
+    // Realized PnL on the remainder plus anything already banked via a
+    // partial take-profit scale-out, so a scaled winner's full gain shows up.
+    position.realizedPnlUsd =
+      (exitPriceUsd - position.entryPriceUsd) * position.quantityTokens + (position.realizedScaleOutPnlUsd ?? 0);
 
     await this.persist();
     log.info(

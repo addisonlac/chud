@@ -159,7 +159,7 @@ export interface TradeSignal {
 // ---------------------------------------------------------------------------
 
 export type PositionStatus = "open" | "closed";
-export type ExitReason = "stop_loss" | "trailing_stop" | "max_age" | "manual";
+export type ExitReason = "stop_loss" | "trailing_stop" | "take_profit" | "max_age" | "manual";
 
 export interface Position {
   id: string;
@@ -171,9 +171,16 @@ export interface Position {
   quantityTokens: number;
   costBasisUsd: number;
   costBasisSol: number;
-  stopLossPriceUsd: number; // fixed floor stop, set at entry, never moves
+  stopLossPriceUsd: number; // floor stop; set at entry, ratcheted up to breakeven after a partial take-profit
   peakPriceUsd: number; // highest price observed since entry; drives the trailing stop
   maxAgeHours: number;
+  // Partial take-profit bookkeeping. A position banks part of the size at
+  // the take-profit target and lets the rest ride the trailing stop, so a
+  // token that pops then fades still books a realized gain instead of
+  // round-tripping to breakeven/stop.
+  tookPartialProfit?: boolean; // true once the take-profit scale-out has fired (fires at most once)
+  scaledOutQuantityTokens?: number; // tokens sold via partial take-profit
+  realizedScaleOutPnlUsd?: number; // PnL already banked from the scale-out, added to the final realized PnL
   exitPriceUsd?: number;
   exitTimestamp?: number;
   exitReason?: ExitReason;

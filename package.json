@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:scanner": "tsx scripts/test-scanner.ts",
-    "backtest": "tsx scripts/backtest.ts"
+    "backtest": "tsx scripts/backtest.ts",
+    "demo:exits": "tsx scripts/exit-rules-demo.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.4",

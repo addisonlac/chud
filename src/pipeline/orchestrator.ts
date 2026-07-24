@@ -8,7 +8,13 @@ import { marketContext } from "../data/marketContext.js";
 import { analyzeSentiment } from "../ai/sentiment.js";
 import { scoreTrade } from "../ai/scorer.js";
 import { assessTokenSafety, defaultRugCheckConfig } from "../safety/rugCheck.js";
-import { sizePosition, meetsConfidenceThreshold, checkExitConditions, defaultRiskConfig } from "../risk/riskManager.js";
+import {
+  sizePosition,
+  meetsConfidenceThreshold,
+  checkExitConditions,
+  checkTakeProfit,
+  defaultRiskConfig,
+} from "../risk/riskManager.js";
 import { executeBuy, executeSell } from "../execution/jupiterExecutor.js";
 import { Portfolio } from "../state/portfolio.js";
 import { PositionStore } from "../state/positionStore.js";
@@ -18,7 +24,7 @@ import { TelegramNotifier } from "../notify/telegram.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { childLogger } from "../utils/logger.js";
 import { env } from "../config/env.js";
-import type { PumpFunToken, ScoringPayload, TradeSignal } from "../types/index.js";
+import type { Position, PumpFunToken, ScoringPayload, TradeSignal } from "../types/index.js";
 
 const log = childLogger("orchestrator");
 
@@ -251,9 +257,9 @@ export class TradingOrchestrator {
   }
 
   /**
-   * Enforces the (trailing) stop and 48h max-age exit. No fixed
-   * take-profit — the trailing stop is what locks in gains on a winner
-   * instead of letting it round-trip back to a stop-loss.
+   * Enforces the exit rules on open positions: a partial take-profit
+   * scale-out (bank part of the gain, let the rest ride), then the
+   * (trailing/breakeven) stop and the max-age full exit.
    */
   private async monitorPositions(): Promise<void> {
     const openPositions = this.deps.positionStore.getOpen();
@@ -266,20 +272,28 @@ export class TradingOrchestrator {
         if (currentPriceUsd <= 0) continue;
 
         const tracked = (await this.deps.positionStore.updatePeakPrice(position.id, currentPriceUsd)) ?? position;
+
+        // 1. Partial take-profit: bank part of the size, keep the rest open.
+        const tp = checkTakeProfit(tracked, currentPriceUsd);
+        if (tp.shouldScaleOut) {
+          if (await this.scaleOutPosition(tracked, tp.sellFraction, currentPriceUsd)) continue;
+        }
+
+        // 2. Full-exit rules (stop / trailing / breakeven / max age).
         const exitCheck = checkExitConditions(tracked, currentPriceUsd);
         if (!exitCheck.shouldExit || !exitCheck.reason) continue;
 
         const mode = env.LIVE_TRADING ? "live" : "paper";
-        const result = await executeSell(position.mint, position.quantityTokens, mode);
+        const result = await executeSell(tracked.mint, tracked.quantityTokens, mode);
         if (!result.success) {
-          log.error({ mint: position.mint, error: result.error }, "sell execution failed");
-          await this.deps.telegram.notifyExecutionError("sell", position.symbol, result.error ?? "unknown error");
+          log.error({ mint: tracked.mint, error: result.error }, "sell execution failed");
+          await this.deps.telegram.notifyExecutionError("sell", tracked.symbol, result.error ?? "unknown error");
           continue;
         }
 
-        const proceedsSol = (currentPriceUsd * position.quantityTokens) / (await marketContext.getSolPriceUsd());
+        const proceedsSol = (currentPriceUsd * tracked.quantityTokens) / (await marketContext.getSolPriceUsd());
         this.deps.portfolio.applySell(proceedsSol);
-        const closed = await this.deps.positionStore.closePosition(position.id, currentPriceUsd, exitCheck.reason);
+        const closed = await this.deps.positionStore.closePosition(tracked.id, currentPriceUsd, exitCheck.reason);
         if (closed) {
           const entry = await this.deps.tradeLog.recordClosedPosition(closed);
           await this.deps.telegram.notifyPositionClosed(entry);
@@ -288,5 +302,38 @@ export class TradingOrchestrator {
         log.error({ mint: position.mint, err: (err as Error).message }, "position monitor error");
       }
     }
+  }
+
+  /**
+   * Executes a partial take-profit: sells `sellFraction` of the position,
+   * returns the proceeds to the portfolio, and records the scale-out. The
+   * position stays open (floor raised to breakeven) so the rest rides.
+   * Returns true if the scale-out was executed.
+   */
+  private async scaleOutPosition(position: Position, sellFraction: number, currentPriceUsd: number): Promise<boolean> {
+    const sellQty = position.quantityTokens * sellFraction;
+    if (sellQty <= 0) return false;
+
+    const mode = env.LIVE_TRADING ? "live" : "paper";
+    const result = await executeSell(position.mint, sellQty, mode);
+    if (!result.success) {
+      log.error({ mint: position.mint, error: result.error }, "partial take-profit sell failed");
+      await this.deps.telegram.notifyExecutionError("take-profit", position.symbol, result.error ?? "unknown error");
+      return false;
+    }
+
+    const proceedsSol = (currentPriceUsd * sellQty) / (await marketContext.getSolPriceUsd());
+    this.deps.portfolio.applySell(proceedsSol);
+
+    const scaled = await this.deps.positionStore.scaleOutPosition(position.id, sellFraction, currentPriceUsd);
+    if (scaled) {
+      await this.deps.telegram.notifyPartialTakeProfit(
+        position.symbol,
+        sellFraction,
+        currentPriceUsd,
+        scaled.realizedPnlUsd,
+      );
+    }
+    return true;
   }
 }

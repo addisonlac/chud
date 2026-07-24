@@ -4,10 +4,17 @@
  *   npm run backtest
  *
  * For each token it simulates: buy at the start of the candle series, then
- * walk forward candle-by-candle applying the exact live exit rules — fixed
- * -20% stop, trailing stop off the peak, and the 48h max hold — and records
- * the result. Then it prints aggregate stats (win rate, avg win/loss,
- * expectancy, total return) using the same stats code the live bot uses.
+ * walk forward candle-by-candle applying the exact live exit rules — the
+ * partial take-profit scale-out, the fixed/breakeven floor stop, the tiered
+ * trailing stop off the peak, and the 48h max hold — by calling the same
+ * risk-manager functions the live bot uses. Then it prints aggregate stats
+ * (win rate, avg win/loss, expectancy, total return) using the same stats
+ * code the live bot uses.
+ *
+ * Intra-candle assumption: within each candle we update the peak from the
+ * high, fill the take-profit if the high reached the target, then check the
+ * stop against the low (worst case). Real fills can't know intra-candle
+ * ordering — this is a reasonable, mildly-optimistic-on-TP convention.
  *
  * Token universe: data/backtest-mints.json (a JSON array of mint strings)
  * if present, otherwise the current trending tokens from Birdeye.
@@ -22,9 +29,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { getCandlesForTimeframe, getTrendingTokenMints } from "../src/data/birdeye.js";
-import { defaultRiskConfig } from "../src/risk/riskManager.js";
+import { checkTakeProfit, computeEffectiveStop, defaultRiskConfig } from "../src/risk/riskManager.js";
 import { computeTradeStats } from "../src/state/tradeLog.js";
-import type { Candle, ExitReason, TradeLogEntry } from "../src/types/index.js";
+import type { Candle, ExitReason, Position, TradeLogEntry, TradeSignal } from "../src/types/index.js";
 
 const DEFAULT_UNIVERSE_SIZE = 30;
 const MINTS_FILE = path.resolve("data/backtest-mints.json");
@@ -38,7 +45,45 @@ interface SimResult {
   heldHours: number;
 }
 
-/** Walk the candle series applying the live exit rules; return the outcome. */
+/** Build a minimal open Position so the backtest can call the live risk functions. */
+function makeBacktestPosition(mint: string, entry: number, entryTime: number): Position {
+  const config = defaultRiskConfig();
+  const signal: TradeSignal = {
+    mint,
+    symbol: mint.slice(0, 6),
+    confidence: 0,
+    direction: "long",
+    reasoning: "",
+    entryPriceUsd: entry,
+    generatedAt: entryTime,
+  };
+  return {
+    id: mint,
+    mint,
+    symbol: mint.slice(0, 6),
+    status: "open",
+    entryPriceUsd: entry,
+    entryTimestamp: entryTime,
+    quantityTokens: 1,
+    costBasisUsd: entry,
+    costBasisSol: 0,
+    stopLossPriceUsd: entry * (1 - config.stopLossPct),
+    peakPriceUsd: entry,
+    maxAgeHours: config.maxPositionAgeHours,
+    tookPartialProfit: false,
+    scaledOutQuantityTokens: 0,
+    realizedScaleOutPnlUsd: 0,
+    signal,
+  };
+}
+
+/**
+ * Walk the candle series applying the live exit rules, reusing the exact
+ * risk-manager functions (checkTakeProfit + computeEffectiveStop). Tracks a
+ * fractional position: the take-profit banks part of the gain, the rest
+ * rides the (tightened, breakeven-floored) trailing stop. Returns the
+ * blended outcome as a return on the full original position.
+ */
 function simulate(mint: string, series: Candle[]): SimResult | null {
   if (series.length < 2) return null;
 
@@ -47,50 +92,50 @@ function simulate(mint: string, series: Candle[]): SimResult | null {
   if (entry <= 0) return null;
 
   const entryTime = series[0]!.timestamp * 1000;
-  const fixedStop = entry * (1 - config.stopLossPct);
-  let peak = entry;
+  const pos = makeBacktestPosition(mint, entry, entryTime);
+
+  let remaining = 1; // fraction of the original position still held
+  let bankedPnlPct = 0; // return already realized via scale-out, as a fraction of entry
+
+  const finish = (exitPriceUsd: number, exitReason: SimResult["exitReason"], heldHours: number): SimResult => ({
+    mint,
+    entryPriceUsd: entry,
+    exitPriceUsd,
+    pnlPct: bankedPnlPct + remaining * ((exitPriceUsd - entry) / entry),
+    exitReason,
+    heldHours,
+  });
 
   for (let i = 1; i < series.length; i++) {
     const c = series[i]!;
-    peak = Math.max(peak, c.high); // new highs arm/raise the trailing stop
-    const trailingStop = peak * (1 - config.trailingStopPct);
-    const effStop = Math.max(fixedStop, trailingStop);
+    pos.peakPriceUsd = Math.max(pos.peakPriceUsd, c.high); // new highs arm the trail/breakeven
 
-    // Stop fills if the candle's low pierces it (worst-case intra-candle).
-    if (c.low <= effStop) {
-      return {
-        mint,
-        entryPriceUsd: entry,
-        exitPriceUsd: effStop,
-        pnlPct: (effStop - entry) / entry,
-        exitReason: trailingStop > fixedStop ? "trailing_stop" : "stop_loss",
-        heldHours: (c.timestamp * 1000 - entryTime) / 3.6e6,
-      };
+    // 1. Partial take-profit — fills if the candle's high reached the target.
+    const tp = checkTakeProfit(pos, c.high, config);
+    if (tp.shouldScaleOut) {
+      const soldFraction = remaining * tp.sellFraction;
+      bankedPnlPct += soldFraction * ((tp.targetPriceUsd - entry) / entry);
+      remaining -= soldFraction;
+      pos.tookPartialProfit = true;
+      pos.stopLossPriceUsd = Math.max(pos.stopLossPriceUsd, entry); // breakeven floor
     }
 
+    // 2. Stop — fills if the candle's low pierces the effective stop (worst case).
+    const stop = computeEffectiveStop(pos, config);
+    if (c.low <= stop.price) {
+      return finish(stop.price, stop.isTrailing ? "trailing_stop" : "stop_loss", (c.timestamp * 1000 - entryTime) / 3.6e6);
+    }
+
+    // 3. Max hold age.
     const ageHours = (c.timestamp * 1000 - entryTime) / 3.6e6;
     if (ageHours >= config.maxPositionAgeHours) {
-      return {
-        mint,
-        entryPriceUsd: entry,
-        exitPriceUsd: c.close,
-        pnlPct: (c.close - entry) / entry,
-        exitReason: "max_age",
-        heldHours: ageHours,
-      };
+      return finish(c.close, "max_age", ageHours);
     }
   }
 
-  // Never exited within the data window — close at the last candle.
+  // Never exited within the data window — close the remainder at the last candle.
   const last = series[series.length - 1]!;
-  return {
-    mint,
-    entryPriceUsd: entry,
-    exitPriceUsd: last.close,
-    pnlPct: (last.close - entry) / entry,
-    exitReason: "end_of_data",
-    heldHours: (last.timestamp * 1000 - entryTime) / 3.6e6,
-  };
+  return finish(last.close, "end_of_data", (last.timestamp * 1000 - entryTime) / 3.6e6);
 }
 
 function toLogEntry(r: SimResult): TradeLogEntry {
@@ -105,7 +150,8 @@ function toLogEntry(r: SimResult): TradeLogEntry {
     holdHours: r.heldHours,
     quantityTokens: 1,
     costBasisUsd: r.entryPriceUsd,
-    realizedPnlUsd: r.exitPriceUsd - r.entryPriceUsd,
+    // Blended return (banked scale-out + remainder) on the 1-token position.
+    realizedPnlUsd: r.pnlPct * r.entryPriceUsd,
     pnlPct: r.pnlPct,
     exitReason: r.exitReason === "end_of_data" ? "manual" : r.exitReason,
     signalConfidence: 0,

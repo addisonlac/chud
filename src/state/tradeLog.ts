@@ -64,7 +64,10 @@ export function toTradeLogEntry(position: Position): TradeLogEntry {
     quantityTokens: position.quantityTokens,
     costBasisUsd: position.costBasisUsd,
     realizedPnlUsd: position.realizedPnlUsd,
-    pnlPct: (position.exitPriceUsd - position.entryPriceUsd) / position.entryPriceUsd,
+    // Return on the capital deployed, so a partial take-profit's banked gain
+    // is included (not just the final exit price). For a trade with no
+    // scale-out this equals (exit − entry)/entry.
+    pnlPct: position.costBasisUsd > 0 ? position.realizedPnlUsd / position.costBasisUsd : 0,
     exitReason: position.exitReason,
     signalConfidence: position.signal.confidence,
     won: position.realizedPnlUsd > 0,

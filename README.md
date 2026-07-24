@@ -41,14 +41,29 @@ via Jupiter under a fixed set of risk rules.
 - Max **2%** portfolio risk per trade, sized against a **20%** stop loss
   (fixed-fractional sizing → 10% of portfolio notional per trade).
 - Fixed stop loss at **-20%** from entry, protecting the 2%-risk sizing.
-- **Trailing stop**: once a position has run up enough that
-  `peak price × (1 - TRAILING_STOP_PCT)` clears the fixed stop, the stop
-  ratchets up to trail that far below the highest price seen since entry
-  (never back down). This is what actually lets winners "ride" — without
-  it, a token that pumps 5x and round-trips back down would exit at the
-  original -20% loss instead of locking in any of the gain.
+- **Partial take-profit** (`TAKE_PROFIT_PCT` / `TAKE_PROFIT_SIZE_PCT`,
+  default +60% / sell 50%): once a position hits the target, half the size
+  is sold to bank the gain and the rest keeps riding. This adds the win-side
+  asymmetry the original "no take-profit" rules lacked — backtests of the
+  old rules had negative expectancy because stops took full losses while
+  winners got clipped small by the max-hold clock.
+- **Breakeven floor** (`BREAKEVEN_TRIGGER_PCT`, default +30%): after banking
+  partial profit — or after a large run-up — the floor stop rises to
+  breakeven, so a winner that reverses can no longer become a full loss.
+- **Trailing stop**: trails `peak × (1 - TRAILING_STOP_PCT)` below the
+  highest price since entry (never back down), letting winners "ride." It
+  stays **loose** (default 25%) until partial profit is banked, then
+  **tightens** (`TRAILING_STOP_TIGHT_PCT`, default 15%) on the runner.
+  Keeping it loose until the take-profit fires is deliberate — a memecoin
+  routinely wicks 20-30% mid-run, and a tight trail armed early just shakes
+  you out before the token reaches the target.
 - Any position older than **48h** is force-closed regardless of price.
 - **0.5 SOL** reserve is never spent, on every trade.
+
+Validate these rules two ways without any API key:
+`npm run demo:exits` runs the old vs. new exit rules over archetypal price
+paths and prints the expectancy difference; `npm run backtest` (needs a
+Birdeye key) runs the same rules against real historical candles.
 
 ### Rug/safety gate (`src/safety/rugCheck.ts`)
 
@@ -168,7 +183,7 @@ src/
     whaleList.ts                top-50 whale wallet watchlist (persisted)
     solanaWhalePoller.ts          polls free public Solana RPC per watched wallet
     whaleTracker.ts                 rolling per-mint whale buy/sell activity
-  risk/riskManager.ts            position sizing, fixed + trailing stop, max-age exit
+  risk/riskManager.ts            position sizing, take-profit scale-out, breakeven + trailing stop, max-age exit
   notify/
     telegram.ts                   push notifications (opened/closed/errors)
     telegramCommands.ts             /status /stats /positions /help (long-polling, owner-only)
@@ -203,9 +218,12 @@ Position monitor (every 30s, independent loop):
   for each open position:
     -> Birdeye current price
     -> PositionStore.updatePeakPrice (trailing-stop input)
-    -> checkExitConditions (fixed -20% stop, trailing stop off the peak, OR age >= 48h)
-    -> executeSell + PositionStore.closePosition + TradeLog.recordClosedPosition
-    -> Telegram: "WIN/LOSS $SYMBOL ..."
+    -> checkTakeProfit: at +60%, sell half + raise floor to breakeven
+       -> executeSell(partial) + PositionStore.scaleOutPosition
+       -> Telegram: "TOOK PROFIT $SYMBOL ..."
+    -> checkExitConditions (breakeven/trailing stop off the peak, OR age >= 48h)
+       -> executeSell + PositionStore.closePosition + TradeLog.recordClosedPosition
+       -> Telegram: "WIN/LOSS $SYMBOL ..."
 ```
 
 Concurrency is capped at 3 simultaneous token evaluations
@@ -341,11 +359,13 @@ cause — check the scanner logs.
 ## Running
 
 ```bash
-npm run dev      # ts-node style dev run with auto-reload
-npm run build    # compile to dist/
-npm start        # run compiled output
-npm test         # run the unit test suite (pure logic, no network/API keys needed)
+npm run dev        # ts-node style dev run with auto-reload
+npm run build      # compile to dist/
+npm start          # run compiled output
+npm test           # run the unit test suite (pure logic, no network/API keys needed)
 npm run typecheck
+npm run demo:exits # compare old vs new exit rules on archetypal paths (no API key)
+npm run backtest   # simulate exit rules against real Birdeye candles (needs a key)
 ```
 
 Endpoints exposed on `PORT` (default 3000):
@@ -379,10 +399,14 @@ Endpoints exposed on `PORT` (default 3000):
   fees). It does not catch every scam — a token can pass every check here
   and still be a bad trade for reasons the AI scorer (or nothing) catches.
   Treat it as a floor, not a guarantee.
-- No backtesting harness is included; `/stats` gives you real calibration
-  data once you've paper-traded long enough to accumulate closed trades
-  (30+ recommended), but there's no way to evaluate the strategy against
-  historical data before that.
+- The backtest (`npm run backtest`) only exercises the *mechanical exit
+  rules* against historical candles — it assumes entry at candle 0 and does
+  not test the AI's token-selection edge or entry timing. On Birdeye's free
+  tier it also can't fetch OHLCV for most brand-new pump.fun tokens, so the
+  usable universe is small and survivorship-biased toward today's winners.
+  `npm run demo:exits` sidesteps the data limit with archetypal paths, and
+  `/stats` gives you real calibration once you've paper-traded enough closed
+  trades (30+ recommended) — the only unbiased read on the full strategy.
 - Latency is REST-polling-class (seconds), not sniper-bot-class
   (sub-100ms via direct Geyser/mempool feeds). By the time this bot acts,
   dedicated latency-optimized bots have often already captured much of a

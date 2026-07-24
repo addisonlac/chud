@@ -72,6 +72,26 @@ const envSchema = z.object({
   TRAILING_STOP_PCT: numFromString(0.25),
   MAX_POSITION_AGE_HOURS: numFromString(48),
   MIN_SOL_RESERVE: numFromString(0.5),
+
+  // --- Profit-taking / stop-tightening (exit-rule overhaul) ---
+  // The original "no take-profit, let winners ride" rules had negative
+  // expectancy in backtests: stops took full -20% losses while winners got
+  // clipped small by the 48h max-hold. These add asymmetry back.
+  //
+  // Partial take-profit: once a position is up TAKE_PROFIT_PCT, sell
+  // TAKE_PROFIT_SIZE_PCT of it to bank the gain, and let the rest ride the
+  // trailing stop. Set TAKE_PROFIT_PCT=0 to disable (pure ride-the-trail).
+  TAKE_PROFIT_PCT: numFromString(0.6), // +60% first target
+  TAKE_PROFIT_SIZE_PCT: numFromString(0.5), // sell half at the target
+  // Breakeven floor: once the peak is up BREAKEVEN_TRIGGER_PCT from entry (or
+  // once partial profit is banked), the floor stop rises to breakeven so a
+  // winner that reverses can't become a full loss. Kept high enough that a
+  // normal first pullback doesn't scratch the trade out.
+  BREAKEVEN_TRIGGER_PCT: numFromString(0.3), // +30% arms the breakeven floor
+  // The trailing stop tightens to this ONLY after partial profit is banked —
+  // before that it stays loose (TRAILING_STOP_PCT) so memecoin volatility
+  // doesn't wick the position out before it reaches the take-profit target.
+  TRAILING_STOP_TIGHT_PCT: numFromString(0.15), // tighter trail on the banked runner
   WHALE_WATCHLIST_SIZE: numFromString(50),
 
   // Rug/safety gate (src/safety/rugCheck.ts)

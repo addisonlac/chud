@@ -8,6 +8,14 @@ export interface RiskConfig {
   maxPositionAgeHours: number;
   minSolReserve: number;
   confidenceThreshold: number;
+  // Partial take-profit: sell takeProfitSizePct of the position once it's up
+  // takeProfitPct. takeProfitPct <= 0 disables it.
+  takeProfitPct: number;
+  takeProfitSizePct: number;
+  // Once the peak is up breakevenTriggerPct from entry, the floor stop moves
+  // to breakeven and the trailing stop tightens to trailingStopTightPct.
+  breakevenTriggerPct: number;
+  trailingStopTightPct: number;
 }
 
 export function defaultRiskConfig(): RiskConfig {
@@ -18,6 +26,10 @@ export function defaultRiskConfig(): RiskConfig {
     maxPositionAgeHours: env.MAX_POSITION_AGE_HOURS,
     minSolReserve: env.MIN_SOL_RESERVE,
     confidenceThreshold: env.CONFIDENCE_THRESHOLD,
+    takeProfitPct: env.TAKE_PROFIT_PCT,
+    takeProfitSizePct: env.TAKE_PROFIT_SIZE_PCT,
+    breakevenTriggerPct: env.BREAKEVEN_TRIGGER_PCT,
+    trailingStopTightPct: env.TRAILING_STOP_TIGHT_PCT,
   };
 }
 
@@ -99,26 +111,71 @@ export interface EffectiveStop {
 }
 
 /**
- * The active stop is whichever is higher: the original fixed -20% floor
- * set at entry, or a trailing stop trailingStopPct below the peak price
- * since entry. It only ever ratchets up as new peaks are made, never down.
- * This is what actually lets winners "ride" instead of round-tripping a
- * 5x pump back down to a full stop-loss loss — once a token has run up
- * enough that peak*(1-trailingStopPct) clears the entry stop, gains start
- * getting locked in automatically.
+ * The active stop is whichever is highest of three floors, ratcheting up
+ * with new peaks and never down:
+ *   1. the fixed -20% floor set at entry (also raised to breakeven after a
+ *      partial take-profit, via position.stopLossPriceUsd);
+ *   2. a breakeven floor (entry) once the position has either banked partial
+ *      profit OR run up breakevenTriggerPct — so a winner that reverses can't
+ *      become a full loss;
+ *   3. a trailing stop below the peak. It stays LOOSE (trailingStopPct) until
+ *      partial profit is banked, then tightens to trailingStopTightPct.
+ *
+ * Keeping the trail loose until the take-profit fires is deliberate: a
+ * memecoin routinely wicks 20-30% mid-run, so a tight trail armed early just
+ * shakes you out before the token reaches the target. Once half the size is
+ * banked, the remainder is house money and gets the tighter trail.
  */
 export function computeEffectiveStop(position: Position, config: RiskConfig = defaultRiskConfig()): EffectiveStop {
-  const trailingStopPrice = position.peakPriceUsd * (1 - config.trailingStopPct);
-  if (trailingStopPrice > position.stopLossPriceUsd) {
+  const entry = position.entryPriceUsd;
+  const banked = position.tookPartialProfit === true;
+  const peakGainPct = entry > 0 ? (position.peakPriceUsd - entry) / entry : 0;
+
+  // Breakeven floor arms after banking partial profit or a large run-up.
+  const breakevenArmed = banked || peakGainPct >= config.breakevenTriggerPct;
+  // Trail only tightens after partial profit is banked.
+  const trailPct = banked ? config.trailingStopTightPct : config.trailingStopPct;
+
+  const trailingStopPrice = position.peakPriceUsd * (1 - trailPct);
+  const floor = breakevenArmed ? Math.max(position.stopLossPriceUsd, entry) : position.stopLossPriceUsd;
+
+  if (trailingStopPrice > floor) {
     return { price: trailingStopPrice, isTrailing: true };
   }
-  return { price: position.stopLossPriceUsd, isTrailing: false };
+  return { price: floor, isTrailing: false };
+}
+
+export interface TakeProfitCheck {
+  shouldScaleOut: boolean;
+  sellFraction: number; // fraction of the *current remaining* position to sell
+  targetPriceUsd: number;
 }
 
 /**
- * Three exit triggers: the (trailing) stop, and the 48h max age. There is
- * deliberately no take-profit rule ("let winners ride" per the strategy) —
- * the trailing stop is what protects realized gains instead.
+ * Partial take-profit: once (and only once) the price reaches
+ * entry × (1 + takeProfitPct), signal selling takeProfitSizePct of the
+ * position to bank the gain. The remainder keeps riding the trailing stop.
+ * Disabled when takeProfitPct/takeProfitSizePct is 0 or the scale-out has
+ * already fired for this position.
+ */
+export function checkTakeProfit(
+  position: Position,
+  currentPriceUsd: number,
+  config: RiskConfig = defaultRiskConfig(),
+): TakeProfitCheck {
+  const targetPriceUsd = position.entryPriceUsd * (1 + config.takeProfitPct);
+  const disabled = config.takeProfitPct <= 0 || config.takeProfitSizePct <= 0;
+
+  if (disabled || position.tookPartialProfit || currentPriceUsd < targetPriceUsd) {
+    return { shouldScaleOut: false, sellFraction: 0, targetPriceUsd };
+  }
+  return { shouldScaleOut: true, sellFraction: config.takeProfitSizePct, targetPriceUsd };
+}
+
+/**
+ * Full-exit triggers: the (trailing/breakeven) stop and the max hold age.
+ * The partial take-profit is handled separately by checkTakeProfit — it
+ * scales out rather than fully closing, so winners keep riding.
  */
 export function checkExitConditions(
   position: Position,
