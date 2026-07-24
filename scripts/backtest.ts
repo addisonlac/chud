@@ -21,7 +21,7 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { getCandles, getTrendingTokenMints } from "../src/data/birdeye.js";
+import { getCandlesForTimeframe, getTrendingTokenMints } from "../src/data/birdeye.js";
 import { defaultRiskConfig } from "../src/risk/riskManager.js";
 import { computeTradeStats } from "../src/state/tradeLog.js";
 import type { Candle, ExitReason, TradeLogEntry } from "../src/types/index.js";
@@ -141,9 +141,13 @@ async function main() {
   const results: SimResult[] = [];
   for (const mint of mints) {
     try {
-      const candles = await getCandles(mint);
-      // Prefer 1h candles (up to 7d of history); fall back to 5m.
-      const series = candles["1h"].length >= 2 ? candles["1h"] : candles["5m"];
+      // Prefer 1h candles (up to 7d of history); fall back to 5m only if the
+      // 1h series is too short. One Birdeye call per token (two at most) keeps
+      // us well under the free-tier rate limit so more tokens get evaluated.
+      let series = await getCandlesForTimeframe(mint, "1h");
+      if (series.length < 2) {
+        series = await getCandlesForTimeframe(mint, "5m");
+      }
       const r = simulate(mint, series);
       if (r) {
         results.push(r);

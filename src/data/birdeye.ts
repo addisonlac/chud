@@ -83,7 +83,7 @@ function authHeaders(): Record<string, string> {
   };
 }
 
-async function getCandlesForTimeframe(mint: string, timeframe: CandleTimeframe): Promise<Candle[]> {
+export async function getCandlesForTimeframe(mint: string, timeframe: CandleTimeframe): Promise<Candle[]> {
   const now = Math.floor(Date.now() / 1000);
   const from = now - TIMEFRAME_LOOKBACK_SECONDS[timeframe];
   const type = TIMEFRAME_TO_BIRDEYE_TYPE[timeframe];
