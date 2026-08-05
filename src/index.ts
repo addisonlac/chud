@@ -118,7 +118,9 @@ async function main(): Promise<void> {
     getStatusReply: async () => {
       const openPositions = positionStore.getOpen();
       const solPriceUsd = await marketContext.getSolPriceUsd();
-      const openPositionsValueUsd = openPositions.reduce((sum, p) => sum + p.costBasisUsd, 0);
+      // Remaining deployed value (drops as tokens are scaled out at take-profit);
+      // costBasisUsd would double-count against the scale-out proceeds in SOL.
+      const openPositionsValueUsd = openPositions.reduce((sum, p) => sum + p.quantityTokens * p.entryPriceUsd, 0);
       const snapshot = portfolio.getSnapshot(openPositionsValueUsd, solPriceUsd, openPositions.length);
       return formatStatusReply({
         mode: env.LIVE_TRADING ? "live" : "paper",
