@@ -8,13 +8,8 @@ import { marketContext } from "../data/marketContext.js";
 import { analyzeSentiment } from "../ai/sentiment.js";
 import { scoreTrade } from "../ai/scorer.js";
 import { assessTokenSafety, defaultRugCheckConfig } from "../safety/rugCheck.js";
-import {
-  sizePosition,
-  meetsConfidenceThreshold,
-  checkExitConditions,
-  checkTakeProfit,
-  defaultRiskConfig,
-} from "../risk/riskManager.js";
+import { sizePosition, checkExitConditions, checkTakeProfit, defaultRiskConfig } from "../risk/riskManager.js";
+import { computeAdaptiveConfidenceThreshold, type AdaptiveThreshold } from "../state/tradeLog.js";
 import { executeBuy, executeSell, applyPaperExitCost } from "../execution/jupiterExecutor.js";
 import { Portfolio } from "../state/portfolio.js";
 import { PositionStore } from "../state/positionStore.js";
@@ -112,8 +107,27 @@ export class TradingOrchestrator {
    * where tokens drop out: almost all get cut at the >$50k market-cap
    * filter (brand-new tokens are tiny), which is why trades are rare.
    */
+  /**
+   * The confidence gate to apply right now: the configured baseline, or a
+   * higher value the auto-calibration loop has learned to use once realized
+   * results show lower-confidence trades were losing. Falls back to the
+   * static baseline when adaptation is disabled.
+   */
+  private currentConfidenceGate(): AdaptiveThreshold {
+    const baseline = env.CONFIDENCE_THRESHOLD;
+    if (!env.ADAPTIVE_CONFIDENCE_ENABLED) {
+      return { threshold: baseline, baseline, active: false, reason: "adaptive gate disabled" };
+    }
+    return computeAdaptiveConfidenceThreshold(this.deps.tradeLog.getStats(), baseline, {
+      minSample: env.ADAPTIVE_CONFIDENCE_MIN_SAMPLE,
+      minBucketCount: env.ADAPTIVE_CONFIDENCE_MIN_BUCKET,
+      marginPct: env.ADAPTIVE_CONFIDENCE_MARGIN_PCT,
+    });
+  }
+
   private logFunnel(): void {
     const f = this.funnel;
+    const gate = this.currentConfidenceGate();
     log.info(
       {
         seen: f.seen,
@@ -124,6 +138,8 @@ export class TradingOrchestrator {
         evalFailed: f.evalFailed,
         rejectedBySafety: f.rejectedSafety,
         rejectedLowConfidence: f.rejectedLowConfidence,
+        confidenceGate: gate.threshold,
+        confidenceGateAdapted: gate.active,
         signals: f.signals,
         tradesOpened: f.tradesOpened,
       },
@@ -204,9 +220,16 @@ export class TradingOrchestrator {
 
     const scoring = await scoreTrade(payload); // rule #6: Opus scores the trade
 
-    if (scoring.direction !== "long" || !meetsConfidenceThreshold(scoring.confidence)) {
+    // Auto-calibrated confidence gate: the effective threshold may be raised
+    // above the baseline once realized results show low-confidence trades
+    // have been losing money (see computeAdaptiveConfidenceThreshold).
+    const gate = this.currentConfidenceGate();
+    if (scoring.direction !== "long" || scoring.confidence <= gate.threshold) {
       this.funnel.rejectedLowConfidence++;
-      log.debug({ mint: token.mint, confidence: scoring.confidence, direction: scoring.direction }, "no trade");
+      log.debug(
+        { mint: token.mint, confidence: scoring.confidence, direction: scoring.direction, gate: gate.threshold },
+        "no trade",
+      );
       return;
     }
     this.funnel.signals++;

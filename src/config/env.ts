@@ -88,6 +88,14 @@ const envSchema = z.object({
   // watch it daily without polling. Needs TELEGRAM_* set.
   DAILY_DIGEST_ENABLED: boolFromString(true),
   DAILY_DIGEST_INTERVAL_HOURS: numFromString(24),
+  // Auto-calibration: the bot reads its own realized win rate per confidence
+  // bucket and RAISES the confidence gate to exclude levels that have been
+  // losing money — never below CONFIDENCE_THRESHOLD, and only after enough
+  // data. This is the feedback loop that turns /stats into self-improvement.
+  ADAPTIVE_CONFIDENCE_ENABLED: boolFromString(true),
+  ADAPTIVE_CONFIDENCE_MIN_SAMPLE: numFromString(20), // don't adapt until this many closed trades
+  ADAPTIVE_CONFIDENCE_MIN_BUCKET: numFromString(5), // ignore buckets with fewer trades than this (too noisy)
+  ADAPTIVE_CONFIDENCE_MARGIN_PCT: numFromString(5), // require win rate this many points ABOVE breakeven
 
   // Entry gates. Defaults are tuned for PAPER data-collection: permissive
   // enough that the pipeline actually takes trades (so /stats accumulates

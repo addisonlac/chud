@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeTradeStats, toTradeLogEntry, evaluateGoLiveReadiness } from "../src/state/tradeLog.js";
+import {
+  computeTradeStats,
+  toTradeLogEntry,
+  evaluateGoLiveReadiness,
+  computeAdaptiveConfidenceThreshold,
+} from "../src/state/tradeLog.js";
 import type { Position, TradeLogEntry, TradeSignal } from "../src/types/index.js";
 
 const CRITERIA = { minTrades: 30, minExpectancyPct: 1 };
@@ -201,5 +206,65 @@ describe("evaluateGoLiveReadiness", () => {
     const r = evaluateGoLiveReadiness(stats, CRITERIA);
     expect(r.ready).toBe(true);
     expect(r.checks.every((c) => c.passed)).toBe(true);
+  });
+});
+
+describe("computeAdaptiveConfidenceThreshold", () => {
+  const ADAPT = { minSample: 20, minBucketCount: 5, marginPct: 5 };
+
+  // All wins +20% / all losses -20% → breakeven win rate 50%, target 55%.
+  function bucket(conf: number, wins: number, losses: number): TradeLogEntry[] {
+    return [
+      ...Array.from({ length: wins }, () => makeEntry({ signalConfidence: conf, won: true, pnlPct: 0.2, realizedPnlUsd: 20 })),
+      ...Array.from({ length: losses }, () => makeEntry({ signalConfidence: conf, won: false, pnlPct: -0.2, realizedPnlUsd: -20 })),
+    ];
+  }
+
+  it("holds the baseline while still warming up (below minSample)", () => {
+    const stats = computeTradeStats(bucket(0.75, 5, 5)); // 10 < 20
+    const r = computeAdaptiveConfidenceThreshold(stats, 0.6, ADAPT);
+    expect(r.active).toBe(false);
+    expect(r.threshold).toBeCloseTo(0.6, 5);
+    expect(r.reason).toMatch(/warming up/i);
+  });
+
+  it("raises the gate to the lowest bucket that clears breakeven, excluding losing low-confidence trades", () => {
+    // 0.60-0.72 loses (40%), 0.72-0.80 wins (60%), 0.80-0.90 wins (70%).
+    const stats = computeTradeStats([...bucket(0.65, 4, 6), ...bucket(0.75, 6, 4), ...bucket(0.85, 7, 3)]);
+    const r = computeAdaptiveConfidenceThreshold(stats, 0.6, ADAPT);
+    expect(r.active).toBe(true);
+    expect(r.threshold).toBeCloseTo(0.72, 5); // excludes the losing 0.60-0.72 bucket
+  });
+
+  it("stays at baseline when the lowest bucket is already profitable", () => {
+    const stats = computeTradeStats([...bucket(0.65, 6, 4), ...bucket(0.75, 6, 4), ...bucket(0.85, 7, 3)]);
+    const r = computeAdaptiveConfidenceThreshold(stats, 0.6, ADAPT);
+    expect(r.active).toBe(false);
+    expect(r.threshold).toBeCloseTo(0.6, 5);
+  });
+
+  it("holds baseline (does not halt) when no confidence level has been profitable", () => {
+    const stats = computeTradeStats([...bucket(0.65, 4, 6), ...bucket(0.75, 4, 6), ...bucket(0.85, 4, 6)]);
+    const r = computeAdaptiveConfidenceThreshold(stats, 0.6, ADAPT);
+    expect(r.active).toBe(false);
+    expect(r.threshold).toBeCloseTo(0.6, 5);
+    expect(r.reason).toMatch(/no confidence level/i);
+  });
+
+  it("never lowers the gate below the configured baseline", () => {
+    // A profitable 0.72-0.80 bucket would set 0.72, but baseline 0.85 wins.
+    const stats = computeTradeStats([...bucket(0.65, 4, 6), ...bucket(0.75, 6, 4), ...bucket(0.85, 7, 3)]);
+    const r = computeAdaptiveConfidenceThreshold(stats, 0.85, ADAPT);
+    expect(r.threshold).toBeCloseTo(0.85, 5);
+    expect(r.active).toBe(false);
+  });
+
+  it("ignores buckets too thin to trust (below minBucketCount)", () => {
+    // 0.72-0.80 is a perfect 3/3 but too thin; the gate must skip it and use
+    // the next qualifying bucket (0.80-0.90) instead of trusting 3 trades.
+    const stats = computeTradeStats([...bucket(0.65, 4, 6), ...bucket(0.75, 3, 0), ...bucket(0.85, 7, 3)]);
+    const r = computeAdaptiveConfidenceThreshold(stats, 0.6, ADAPT);
+    expect(r.threshold).toBeCloseTo(0.8, 5);
+    expect(r.active).toBe(true);
   });
 });

@@ -20,6 +20,7 @@ const MIN_SAMPLE_SIZE_FOR_CONFIDENCE = 30;
 
 export interface CalibrationBucket {
   rangeLabel: string;
+  min: number; // lower confidence bound of the bucket (drives the adaptive gate)
   count: number;
   avgPredictedConfidence: number;
   actualWinRatePct: number;
@@ -103,6 +104,83 @@ export function evaluateGoLiveReadiness(stats: TradeStats, criteria: GoLiveCrite
   checks.push({ label: "Confidence is informative", passed: calibrationOk, detail: calibrationDetail });
 
   return { ready: checks.every((c) => c.passed), checks };
+}
+
+export interface AdaptiveThreshold {
+  threshold: number; // the confidence gate to actually use
+  baseline: number; // the configured CONFIDENCE_THRESHOLD floor
+  active: boolean; // true when it has raised the gate above the baseline
+  reason: string; // human-readable explanation for logs/digest
+}
+
+export interface AdaptiveConfig {
+  minSample: number; // min closed trades before adapting at all
+  minBucketCount: number; // ignore confidence buckets thinner than this (too noisy)
+  marginPct: number; // require realized win rate this many points above breakeven
+}
+
+/**
+ * The self-calibration loop. Reads realized per-confidence-bucket win rates
+ * and RAISES the confidence gate to the lowest bucket that has actually been
+ * profitable — i.e. it stops trusting confidence levels that lose money.
+ *
+ * Rules that keep it honest rather than an overfitting machine:
+ *  - Never lowers the gate below the configured baseline (only tightens).
+ *  - Does nothing until minSample closed trades exist (no reacting to noise).
+ *  - Ignores buckets thinner than minBucketCount.
+ *  - "Profitable" = realized win rate ≥ the breakeven win rate implied by the
+ *    realized avg win/loss, plus a safety margin.
+ *  - If no level clears breakeven yet, it holds at baseline (keeps exploring
+ *    in paper) rather than halting — the go-live gate is what blocks real
+ *    money. Assumes roughly monotonic calibration (higher confidence should
+ *    win more); on noisy small samples it takes the lowest clearing bucket.
+ *
+ * Note the exploit/explore tradeoff: once the gate rises past a bucket, that
+ * bucket stops gathering NEW data (its estimate is frozen at what's logged).
+ */
+export function computeAdaptiveConfidenceThreshold(
+  stats: TradeStats,
+  baseline: number,
+  config: AdaptiveConfig,
+): AdaptiveThreshold {
+  const hold = (reason: string): AdaptiveThreshold => ({ threshold: baseline, baseline, active: false, reason });
+
+  if (stats.totalTrades < config.minSample) {
+    return hold(`warming up (${stats.totalTrades}/${config.minSample} trades) — using baseline ${baseline}`);
+  }
+  if (stats.wins === 0 || stats.losses === 0) {
+    return hold("need both wins and losses to calibrate — using baseline");
+  }
+
+  const avgWin = stats.avgWinPct; // positive %
+  const avgLoss = Math.abs(stats.avgLossPct); // magnitude, positive %
+  if (avgWin + avgLoss <= 0) return hold("degenerate win/loss sizes — using baseline");
+
+  // Win rate needed just to break even given the realized payoff ratio.
+  const breakevenWinRatePct = (avgLoss / (avgWin + avgLoss)) * 100;
+  const targetWinRatePct = breakevenWinRatePct + config.marginPct;
+
+  // Buckets are ordered ascending by confidence; take the lowest one with
+  // enough samples whose realized win rate clears the target.
+  const usable = stats.calibrationBuckets.filter((b) => b.count >= config.minBucketCount);
+  const qualifying = usable.find((b) => b.actualWinRatePct >= targetWinRatePct);
+
+  if (!qualifying) {
+    return hold(
+      `no confidence level has cleared breakeven (~${targetWinRatePct.toFixed(0)}% win rate) yet — holding baseline ${baseline}`,
+    );
+  }
+
+  const threshold = Math.max(baseline, qualifying.min);
+  return {
+    threshold,
+    baseline,
+    active: threshold > baseline,
+    reason:
+      threshold > baseline
+        ? `raised to ${threshold} — ${qualifying.rangeLabel} is the lowest level clearing breakeven (${qualifying.actualWinRatePct.toFixed(0)}% ≥ ${targetWinRatePct.toFixed(0)}%)`
+        : `baseline ${baseline} already the lowest profitable level (${qualifying.rangeLabel} wins ${qualifying.actualWinRatePct.toFixed(0)}%)`,
+  };
 }
 
 export function toTradeLogEntry(position: Position): TradeLogEntry {
@@ -219,6 +297,7 @@ export function computeTradeStats(entries: TradeLogEntry[]): TradeStats {
     const inBucket = entries.filter((e) => e.signalConfidence >= bucket.min && e.signalConfidence < bucket.max);
     return {
       rangeLabel: bucket.label,
+      min: bucket.min,
       count: inBucket.length,
       avgPredictedConfidence: inBucket.length ? average(inBucket.map((e) => e.signalConfidence)) : 0,
       actualWinRatePct: inBucket.length ? (inBucket.filter((e) => e.won).length / inBucket.length) * 100 : 0,

@@ -2,7 +2,7 @@ import express, { type Express } from "express";
 import { env } from "../config/env.js";
 import type { Portfolio } from "../state/portfolio.js";
 import type { PositionStore } from "../state/positionStore.js";
-import { type TradeLog, evaluateGoLiveReadiness } from "../state/tradeLog.js";
+import { type TradeLog, evaluateGoLiveReadiness, computeAdaptiveConfidenceThreshold } from "../state/tradeLog.js";
 import { marketContext } from "../data/marketContext.js";
 
 export interface ServerDeps {
@@ -47,7 +47,14 @@ export function createServer(deps: ServerDeps): Express {
       minTrades: env.GO_LIVE_MIN_TRADES,
       minExpectancyPct: env.GO_LIVE_MIN_EXPECTANCY_PCT,
     });
-    res.json({ ...stats, goLive });
+    const adaptiveConfidence = env.ADAPTIVE_CONFIDENCE_ENABLED
+      ? computeAdaptiveConfidenceThreshold(stats, env.CONFIDENCE_THRESHOLD, {
+          minSample: env.ADAPTIVE_CONFIDENCE_MIN_SAMPLE,
+          minBucketCount: env.ADAPTIVE_CONFIDENCE_MIN_BUCKET,
+          marginPct: env.ADAPTIVE_CONFIDENCE_MARGIN_PCT,
+        })
+      : null;
+    res.json({ ...stats, goLive, adaptiveConfidence });
   });
 
   app.get("/trades", (_req, res) => {

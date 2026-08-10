@@ -217,7 +217,7 @@ PumpPortalScanner (websocket stream)  [or PumpFunScanner HTTP poll]
   -> [Birdeye candles] + [NewsAPI -> Sentiment(Groq)] + [WhaleTracker activity]
   -> merged ScoringPayload (incl. security snapshot)
   -> scoreTrade (Groq) -> confidence, direction
-  -> if confidence > CONFIDENCE_THRESHOLD (default 0.60) && direction == long:
+  -> if confidence > the (auto-calibrated) confidence gate && direction == long:
        -> sizePosition (risk manager)
        -> executeBuy (Jupiter, paper|live)
        -> PositionStore.openPosition (peakPriceUsd = entryPriceUsd)
@@ -387,7 +387,8 @@ Endpoints exposed on `PORT` (default 3000):
 - `GET /status` — portfolio snapshot, open positions, SOL price
 - `GET /positions` — full position history (open + closed)
 - `GET /stats` — win rate, expectancy, Brier score, confidence calibration
-  buckets, **plus a `goLive` readiness gate** (see below)
+  buckets, a `goLive` readiness gate, and the `adaptiveConfidence` gate (see
+  below)
 - `GET /trades` — raw closed-trade ledger entries
 
 ## Is it ready for real money? (the go-live gate)
@@ -428,6 +429,35 @@ weeks — the gate recomputes every time you check `/stats`. Two knobs make
   48h, so you're validating that variant. Set it back to 48 to test the
   original. What you **cannot** safely shortcut is `GO_LIVE_MIN_TRADES`
   itself — lowering it to force an early "READY" just means judging on noise.
+
+### Auto-calibration (the feedback loop)
+
+The bot doesn't just record calibration — it acts on it. Once enough trades
+have closed, `computeAdaptiveConfidenceThreshold` reads the realized win rate
+of each confidence bucket and **raises the confidence gate to the lowest
+level that has actually been profitable**, excluding the confidence bands
+that were losing money. It's the loop that turns `/stats` into
+self-improvement instead of just a scoreboard.
+
+Guardrails that keep it honest rather than an overfitting machine:
+
+- **Only tightens, never loosens** below `CONFIDENCE_THRESHOLD`.
+- **Waits for data** — does nothing until `ADAPTIVE_CONFIDENCE_MIN_SAMPLE`
+  (default 20) closed trades, and ignores buckets thinner than
+  `ADAPTIVE_CONFIDENCE_MIN_BUCKET` (default 5) as too noisy.
+- **"Profitable" is defined** — a bucket must beat the breakeven win rate
+  implied by the realized avg win/loss, plus `ADAPTIVE_CONFIDENCE_MARGIN_PCT`.
+- **Doesn't halt** — if no level has been profitable yet, it holds the
+  baseline and keeps exploring (the go-live gate is what blocks real money).
+
+The current gate (and whether it's been raised) shows up in the funnel logs,
+the `/stats` endpoint (`adaptiveConfidence`), and the daily digest. Set
+`ADAPTIVE_CONFIDENCE_ENABLED=false` to pin the static baseline instead.
+
+Known tradeoff: once the gate rises past a bucket, that bucket stops
+gathering *new* data, so a level excluded on an unlucky small sample won't
+get a chance to recover. That's the deliberate exploit-over-explore choice
+for a bot whose job is to stop the bleeding.
 
 ## Known limitations / next steps
 

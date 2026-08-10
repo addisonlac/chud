@@ -2,7 +2,7 @@ import { env, assertRequiredConfig } from "./config/env.js";
 import { childLogger } from "./utils/logger.js";
 import { Portfolio } from "./state/portfolio.js";
 import { PositionStore } from "./state/positionStore.js";
-import { TradeLog, evaluateGoLiveReadiness } from "./state/tradeLog.js";
+import { TradeLog, evaluateGoLiveReadiness, computeAdaptiveConfidenceThreshold } from "./state/tradeLog.js";
 import { WhaleTracker } from "./whales/whaleTracker.js";
 import { WhaleList } from "./whales/whaleList.js";
 import { SolanaWhalePoller } from "./whales/solanaWhalePoller.js";
@@ -157,7 +157,14 @@ async function main(): Promise<void> {
         minTrades: env.GO_LIVE_MIN_TRADES,
         minExpectancyPct: env.GO_LIVE_MIN_EXPECTANCY_PCT,
       });
-      await telegram.notifyDailyDigest(formatDailyDigest(stats, goLive, env.GO_LIVE_MIN_TRADES));
+      const adaptive = env.ADAPTIVE_CONFIDENCE_ENABLED
+        ? computeAdaptiveConfidenceThreshold(stats, env.CONFIDENCE_THRESHOLD, {
+            minSample: env.ADAPTIVE_CONFIDENCE_MIN_SAMPLE,
+            minBucketCount: env.ADAPTIVE_CONFIDENCE_MIN_BUCKET,
+            marginPct: env.ADAPTIVE_CONFIDENCE_MARGIN_PCT,
+          })
+        : undefined;
+      await telegram.notifyDailyDigest(formatDailyDigest(stats, goLive, env.GO_LIVE_MIN_TRADES, adaptive));
     };
     digestTimer = setInterval(() => void sendDigest(), env.DAILY_DIGEST_INTERVAL_HOURS * 60 * 60 * 1000);
     log.info({ everyHours: env.DAILY_DIGEST_INTERVAL_HOURS }, "daily digest scheduled (Telegram)");

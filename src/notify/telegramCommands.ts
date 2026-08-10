@@ -3,7 +3,7 @@ import { fetchJson } from "../utils/http.js";
 import { childLogger } from "../utils/logger.js";
 import { TELEGRAM_API_BASE, sendTelegramMessage, formatPrice } from "./telegram.js";
 import type { Position } from "../types/index.js";
-import type { TradeStats, GoLiveReadiness } from "../state/tradeLog.js";
+import type { TradeStats, GoLiveReadiness, AdaptiveThreshold } from "../state/tradeLog.js";
 
 const log = childLogger("telegram-commands");
 
@@ -79,7 +79,12 @@ export function formatStatsReply(stats: TradeStats, goLive?: GoLiveReadiness): s
  * the /stats rendering and adds a headline: how many more closed trades until
  * the gate can even be judged, so "check daily" is effortless. Pure.
  */
-export function formatDailyDigest(stats: TradeStats, goLive: GoLiveReadiness, minTrades: number): string {
+export function formatDailyDigest(
+  stats: TradeStats,
+  goLive: GoLiveReadiness,
+  minTrades: number,
+  adaptive?: AdaptiveThreshold,
+): string {
   const header = "📅 Daily paper-trading digest";
   if (stats.totalTrades === 0) {
     return `${header}\n\nNo closed trades yet. The go-live gate needs ${minTrades}. Hang tight — trades log as positions close.`;
@@ -91,7 +96,18 @@ export function formatDailyDigest(stats: TradeStats, goLive: GoLiveReadiness, mi
       ? `${remaining} more closed trade${remaining === 1 ? "" : "s"} until the gate can be judged (${stats.totalTrades}/${minTrades}).`
       : `Sample size reached (${stats.totalTrades}/${minTrades}) — the gate verdict below is now meaningful.`;
 
-  return `${header}\n\n${formatStatsReply(stats, goLive)}\n\n${progress}`;
+  const lines = [`${header}`, "", formatStatsReply(stats, goLive)];
+  if (adaptive) {
+    lines.push("");
+    lines.push(
+      adaptive.active
+        ? `🎛️ Auto-calibration: gate raised to ${adaptive.threshold} (baseline ${adaptive.baseline}) — ${adaptive.reason}`
+        : `🎛️ Auto-calibration: gate at baseline ${adaptive.baseline} — ${adaptive.reason}`,
+    );
+  }
+  lines.push("");
+  lines.push(progress);
+  return lines.join("\n");
 }
 
 export function formatPositionsReply(positions: Position[]): string {
