@@ -2,7 +2,7 @@ import { env, assertRequiredConfig } from "./config/env.js";
 import { childLogger } from "./utils/logger.js";
 import { Portfolio } from "./state/portfolio.js";
 import { PositionStore } from "./state/positionStore.js";
-import { TradeLog } from "./state/tradeLog.js";
+import { TradeLog, evaluateGoLiveReadiness } from "./state/tradeLog.js";
 import { WhaleTracker } from "./whales/whaleTracker.js";
 import { WhaleList } from "./whales/whaleList.js";
 import { SolanaWhalePoller } from "./whales/solanaWhalePoller.js";
@@ -129,7 +129,14 @@ async function main(): Promise<void> {
         openPositions,
       });
     },
-    getStatsReply: async () => formatStatsReply(tradeLog.getStats()),
+    getStatsReply: async () =>
+      formatStatsReply(
+        tradeLog.getStats(),
+        evaluateGoLiveReadiness(tradeLog.getStats(), {
+          minTrades: env.GO_LIVE_MIN_TRADES,
+          minExpectancyPct: env.GO_LIVE_MIN_EXPECTANCY_PCT,
+        }),
+      ),
     getPositionsReply: async () => formatPositionsReply(positionStore.getOpen()),
   });
   commandListener.start();

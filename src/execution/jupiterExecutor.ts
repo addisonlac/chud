@@ -25,6 +25,17 @@ interface JupiterSwapResponse {
   swapTransaction: string; // base64
 }
 
+/**
+ * The price a PAPER exit actually realizes after execution friction (Jupiter
+ * route fees + slippage on thin liquidity + priority fees), so paper P&L
+ * isn't the fantasy of a perfect quoted fill. Applied per sell leg. Pure and
+ * unit-testable. Live fills carry these costs for real, so they're not
+ * modeled here — only paper needs the simulation.
+ */
+export function applyPaperExitCost(idealPriceUsd: number, costPct: number = env.PAPER_TRADING_COST_PCT): number {
+  return idealPriceUsd * (1 - Math.max(0, costPct));
+}
+
 async function getQuote(inputMint: string, outputMint: string, amountRaw: number, slippageBps = DEFAULT_SLIPPAGE_BPS) {
   const url =
     `${env.JUPITER_BASE_URL}/quote?inputMint=${inputMint}&outputMint=${outputMint}` +

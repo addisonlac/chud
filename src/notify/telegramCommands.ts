@@ -3,7 +3,7 @@ import { fetchJson } from "../utils/http.js";
 import { childLogger } from "../utils/logger.js";
 import { TELEGRAM_API_BASE, sendTelegramMessage, formatPrice } from "./telegram.js";
 import type { Position } from "../types/index.js";
-import type { TradeStats } from "../state/tradeLog.js";
+import type { TradeStats, GoLiveReadiness } from "../state/tradeLog.js";
 
 const log = childLogger("telegram-commands");
 
@@ -49,7 +49,7 @@ export function formatStatusReply(snapshot: StatusSnapshot): string {
   return lines.join("\n");
 }
 
-export function formatStatsReply(stats: TradeStats): string {
+export function formatStatsReply(stats: TradeStats, goLive?: GoLiveReadiness): string {
   if (stats.totalTrades === 0) return "No closed trades yet.";
 
   const lines = [
@@ -59,6 +59,17 @@ export function formatStatsReply(stats: TradeStats): string {
     `Brier score: ${stats.brierScore !== null ? stats.brierScore.toFixed(3) : "n/a"} (0=perfect, 0.25=no better than a coin flip)`,
   ];
   if (stats.sampleSizeWarning) lines.push(`⚠️ ${stats.sampleSizeWarning}`);
+
+  if (goLive) {
+    lines.push("");
+    lines.push(goLive.ready ? "✅ GO-LIVE GATE: READY" : "⛔ GO-LIVE GATE: NOT READY");
+    for (const c of goLive.checks) {
+      lines.push(`  ${c.passed ? "✅" : "❌"} ${c.label}: ${c.detail}`);
+    }
+    if (goLive.ready) {
+      lines.push("Bar met on paper — but this is permission to consider live with tiny size, not a guarantee.");
+    }
+  }
 
   return lines.join("\n");
 }

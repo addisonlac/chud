@@ -15,7 +15,7 @@ import {
   checkTakeProfit,
   defaultRiskConfig,
 } from "../risk/riskManager.js";
-import { executeBuy, executeSell } from "../execution/jupiterExecutor.js";
+import { executeBuy, executeSell, applyPaperExitCost } from "../execution/jupiterExecutor.js";
 import { Portfolio } from "../state/portfolio.js";
 import { PositionStore } from "../state/positionStore.js";
 import { TradeLog } from "../state/tradeLog.js";
@@ -292,6 +292,9 @@ export class TradingOrchestrator {
         if (!exitCheck.shouldExit || !exitCheck.reason) continue;
 
         const mode = env.LIVE_TRADING ? "live" : "paper";
+        // In paper mode, model execution friction so realized P&L isn't the
+        // fantasy of a perfect quoted fill (live fills pay these for real).
+        const fillPriceUsd = mode === "paper" ? applyPaperExitCost(currentPriceUsd) : currentPriceUsd;
         const result = await executeSell(tracked.mint, tracked.quantityTokens, mode);
         if (!result.success) {
           log.error({ mint: tracked.mint, error: result.error }, "sell execution failed");
@@ -299,9 +302,9 @@ export class TradingOrchestrator {
           continue;
         }
 
-        const proceedsSol = (currentPriceUsd * tracked.quantityTokens) / (await marketContext.getSolPriceUsd());
+        const proceedsSol = (fillPriceUsd * tracked.quantityTokens) / (await marketContext.getSolPriceUsd());
         this.deps.portfolio.applySell(proceedsSol);
-        const closed = await this.deps.positionStore.closePosition(tracked.id, currentPriceUsd, exitCheck.reason);
+        const closed = await this.deps.positionStore.closePosition(tracked.id, fillPriceUsd, exitCheck.reason);
         if (closed) {
           const entry = await this.deps.tradeLog.recordClosedPosition(closed);
           await this.deps.telegram.notifyPositionClosed(entry);
@@ -323,6 +326,7 @@ export class TradingOrchestrator {
     if (sellQty <= 0) return false;
 
     const mode = env.LIVE_TRADING ? "live" : "paper";
+    const fillPriceUsd = mode === "paper" ? applyPaperExitCost(currentPriceUsd) : currentPriceUsd;
     const result = await executeSell(position.mint, sellQty, mode);
     if (!result.success) {
       log.error({ mint: position.mint, error: result.error }, "partial take-profit sell failed");
@@ -330,15 +334,15 @@ export class TradingOrchestrator {
       return false;
     }
 
-    const proceedsSol = (currentPriceUsd * sellQty) / (await marketContext.getSolPriceUsd());
+    const proceedsSol = (fillPriceUsd * sellQty) / (await marketContext.getSolPriceUsd());
     this.deps.portfolio.applySell(proceedsSol);
 
-    const scaled = await this.deps.positionStore.scaleOutPosition(position.id, sellFraction, currentPriceUsd);
+    const scaled = await this.deps.positionStore.scaleOutPosition(position.id, sellFraction, fillPriceUsd);
     if (scaled) {
       await this.deps.telegram.notifyPartialTakeProfit(
         position.symbol,
         sellFraction,
-        currentPriceUsd,
+        fillPriceUsd,
         scaled.realizedPnlUsd,
       );
     }

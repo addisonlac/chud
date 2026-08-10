@@ -387,8 +387,33 @@ Endpoints exposed on `PORT` (default 3000):
 - `GET /status` — portfolio snapshot, open positions, SOL price
 - `GET /positions` — full position history (open + closed)
 - `GET /stats` — win rate, expectancy, Brier score, confidence calibration
-  buckets (see [Win/loss ledger](#winloss-ledger--ai-confidence-calibration))
+  buckets, **plus a `goLive` readiness gate** (see below)
 - `GET /trades` — raw closed-trade ledger entries
+
+## Is it ready for real money? (the go-live gate)
+
+Short answer: **only when the paper stats say so, objectively.** Two pieces
+make that judgment honest:
+
+1. **Paper fills model real costs.** `PAPER_TRADING_COST_PCT` (default 4%
+   round-trip) is applied to every paper exit — Jupiter fees + slippage on
+   thin memecoin liquidity + priority fees. Without it, paper P&L is the
+   fantasy of a perfect fill and a *losing* strategy can look profitable.
+   That mirage is the single most common way people go live and lose.
+2. **An objective go-live gate** (`evaluateGoLiveReadiness`, surfaced in
+   `GET /stats` and the Telegram `/stats` reply). ALL of these must pass:
+   - **Sample size** ≥ `GO_LIVE_MIN_TRADES` (default 30) — enough to not be luck.
+   - **Expectancy after costs** ≥ `GO_LIVE_MIN_EXPECTANCY_PCT` (default +1%/trade).
+   - **Net profitable** — total realized PnL > 0.
+   - **Confidence is informative** — the highest-confidence calibration
+     bucket wins at least as often as the lowest. If higher AI confidence
+     doesn't mean a higher realized win rate, the scorer has no edge and
+     nothing else matters.
+
+The gate erring toward NOT ready is deliberate: a false "ready" costs real
+money. Even when it flips to READY, that's *permission to consider live with
+tiny size*, not a guarantee — memecoins remain adversarial and the edge, if
+any, decays as it's crowded.
 
 ## Known limitations / next steps
 

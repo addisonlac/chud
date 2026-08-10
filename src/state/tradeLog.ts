@@ -42,6 +42,69 @@ export interface TradeStats {
   sampleSizeWarning: string | null;
 }
 
+export interface GoLiveCheck {
+  label: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface GoLiveReadiness {
+  ready: boolean;
+  checks: GoLiveCheck[];
+}
+
+export interface GoLiveCriteria {
+  minTrades: number;
+  minExpectancyPct: number;
+}
+
+/**
+ * Turns "is it profitable enough to risk real money?" from a gut call into an
+ * objective gate. ALL checks must pass. This is deliberately strict — the
+ * cost of a false "ready" is real losses, so the bar errs toward NOT going
+ * live. Note: these stats are only trustworthy if paper fills model real
+ * execution costs (see PAPER_TRADING_COST_PCT); otherwise expectancy is a
+ * frictionless fantasy and this gate will happily green-light a mirage.
+ */
+export function evaluateGoLiveReadiness(stats: TradeStats, criteria: GoLiveCriteria): GoLiveReadiness {
+  const checks: GoLiveCheck[] = [];
+
+  checks.push({
+    label: "Sample size",
+    passed: stats.totalTrades >= criteria.minTrades,
+    detail: `${stats.totalTrades} / ${criteria.minTrades} closed trades`,
+  });
+
+  checks.push({
+    label: "Expectancy after costs",
+    passed: stats.expectancyPct >= criteria.minExpectancyPct,
+    detail: `${stats.expectancyPct >= 0 ? "+" : ""}${stats.expectancyPct.toFixed(2)}% / trade (need ≥ +${criteria.minExpectancyPct}%)`,
+  });
+
+  checks.push({
+    label: "Net profitable",
+    passed: stats.totalRealizedPnlUsd > 0,
+    detail: `total realized PnL $${stats.totalRealizedPnlUsd.toFixed(2)}`,
+  });
+
+  // Confidence must not be anti-informative: the highest populated
+  // calibration bucket should win at least as often as the lowest. If higher
+  // AI confidence doesn't mean higher realized win rate, the scorer has no
+  // selection edge and the whole premise fails.
+  const populated = stats.calibrationBuckets.filter((b) => b.count > 0);
+  let calibrationOk = true;
+  let calibrationDetail = "not enough spread across confidence buckets to judge";
+  if (populated.length >= 2) {
+    const lowest = populated[0]!;
+    const highest = populated[populated.length - 1]!;
+    calibrationOk = highest.actualWinRatePct >= lowest.actualWinRatePct;
+    calibrationDetail = `${highest.rangeLabel} wins ${highest.actualWinRatePct.toFixed(0)}% vs ${lowest.rangeLabel} ${lowest.actualWinRatePct.toFixed(0)}%`;
+  }
+  checks.push({ label: "Confidence is informative", passed: calibrationOk, detail: calibrationDetail });
+
+  return { ready: checks.every((c) => c.passed), checks };
+}
+
 export function toTradeLogEntry(position: Position): TradeLogEntry {
   if (
     position.status !== "closed" ||

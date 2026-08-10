@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { computeTradeStats, toTradeLogEntry } from "../src/state/tradeLog.js";
+import { computeTradeStats, toTradeLogEntry, evaluateGoLiveReadiness } from "../src/state/tradeLog.js";
 import type { Position, TradeLogEntry, TradeSignal } from "../src/types/index.js";
+
+const CRITERIA = { minTrades: 30, minExpectancyPct: 1 };
 
 function makeEntry(overrides: Partial<TradeLogEntry> = {}): TradeLogEntry {
   return {
@@ -145,5 +147,59 @@ describe("toTradeLogEntry", () => {
   it("throws for a position that isn't actually closed", () => {
     const open = makeClosedPosition({ status: "open", exitPriceUsd: undefined, exitTimestamp: undefined, exitReason: undefined, realizedPnlUsd: undefined });
     expect(() => toTradeLogEntry(open)).toThrow();
+  });
+});
+
+describe("evaluateGoLiveReadiness", () => {
+  // Build N entries: `wins` winners at +winPct in the given confidence bucket,
+  // the rest losers at -lossPct in the other bucket.
+  function makeSet(opts: {
+    wins: number;
+    losses: number;
+    winPct: number;
+    lossPct: number;
+    winConf: number;
+    lossConf: number;
+  }): TradeLogEntry[] {
+    const w = Array.from({ length: opts.wins }, () =>
+      makeEntry({ won: true, pnlPct: opts.winPct, realizedPnlUsd: opts.winPct * 100, signalConfidence: opts.winConf }),
+    );
+    const l = Array.from({ length: opts.losses }, () =>
+      makeEntry({ won: false, pnlPct: -opts.lossPct, realizedPnlUsd: -opts.lossPct * 100, signalConfidence: opts.lossConf }),
+    );
+    return [...w, ...l];
+  }
+
+  it("is NOT ready with too few trades even if they're all winners", () => {
+    const stats = computeTradeStats(makeSet({ wins: 5, losses: 0, winPct: 0.1, lossPct: 0, winConf: 0.95, lossConf: 0.75 }));
+    const r = evaluateGoLiveReadiness(stats, CRITERIA);
+    expect(r.ready).toBe(false);
+    expect(r.checks.find((c) => c.label === "Sample size")?.passed).toBe(false);
+  });
+
+  it("is NOT ready when expectancy after costs is negative", () => {
+    const stats = computeTradeStats(makeSet({ wins: 10, losses: 20, winPct: 0.05, lossPct: 0.1, winConf: 0.95, lossConf: 0.75 }));
+    const r = evaluateGoLiveReadiness(stats, CRITERIA);
+    expect(r.ready).toBe(false);
+    expect(r.checks.find((c) => c.label === "Expectancy after costs")?.passed).toBe(false);
+  });
+
+  it("is NOT ready when confidence is anti-informative (high-conf bucket wins less)", () => {
+    // positive expectancy, enough trades, net positive — but wins sit in the
+    // LOW confidence bucket and losses in the HIGH one, so the AI's confidence
+    // is worse than useless.
+    const stats = computeTradeStats(makeSet({ wins: 20, losses: 10, winPct: 0.1, lossPct: 0.05, winConf: 0.75, lossConf: 0.95 }));
+    const r = evaluateGoLiveReadiness(stats, CRITERIA);
+    expect(r.checks.find((c) => c.label === "Expectancy after costs")?.passed).toBe(true);
+    expect(r.checks.find((c) => c.label === "Confidence is informative")?.passed).toBe(false);
+    expect(r.ready).toBe(false);
+  });
+
+  it("is READY only when every check passes", () => {
+    // 30 trades, +5% expectancy, net positive, and higher confidence wins more.
+    const stats = computeTradeStats(makeSet({ wins: 20, losses: 10, winPct: 0.1, lossPct: 0.05, winConf: 0.95, lossConf: 0.75 }));
+    const r = evaluateGoLiveReadiness(stats, CRITERIA);
+    expect(r.ready).toBe(true);
+    expect(r.checks.every((c) => c.passed)).toBe(true);
   });
 });

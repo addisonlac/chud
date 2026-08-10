@@ -70,6 +70,20 @@ const envSchema = z.object({
 
   LIVE_TRADING: boolFromString(false),
 
+  // --- Paper realism & go-live gating ---
+  // Round-trip execution cost applied to every PAPER exit (and each partial
+  // take-profit leg), modeling Jupiter route fees + slippage on thin
+  // memecoin liquidity + Solana priority fees. Without this, paper P&L fills
+  // at the perfect quoted price and a losing strategy can look "profitable"
+  // — the exact false positive that pushes you live into a loss. Applied
+  // per sell leg, so it's slightly conservative on scale-outs (biased toward
+  // NOT going live on a marginal edge, which is the safe direction).
+  PAPER_TRADING_COST_PCT: numFromString(0.04), // ~4% round-trip; raise for thinner tokens
+  // Objective go-live bar (see evaluateGoLiveReadiness). The paper /stats
+  // must clear ALL of these before it's honest to risk real money.
+  GO_LIVE_MIN_TRADES: numFromString(30), // minimum closed trades for statistical meaning
+  GO_LIVE_MIN_EXPECTANCY_PCT: numFromString(1), // required expectancy per trade, AFTER costs (%)
+
   // Entry gates. Defaults are tuned for PAPER data-collection: permissive
   // enough that the pipeline actually takes trades (so /stats accumulates
   // and you learn whether the strategy has edge), while the hard rug checks
