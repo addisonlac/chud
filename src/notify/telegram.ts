@@ -144,4 +144,9 @@ export class TelegramNotifier {
   async notifyExecutionError(context: string, symbol: string, error: string): Promise<void> {
     if (this.enabled) await sendTelegramMessage(formatExecutionErrorMessage(context, symbol, error));
   }
+
+  /** Pre-formatted daily digest (built by formatDailyDigest); pushed on a timer. */
+  async notifyDailyDigest(message: string): Promise<void> {
+    if (this.enabled) await sendTelegramMessage(message);
+  }
 }

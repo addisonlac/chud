@@ -415,6 +415,20 @@ money. Even when it flips to READY, that's *permission to consider live with
 tiny size*, not a guarantee — memecoins remain adversarial and the edge, if
 any, decays as it's crowded.
 
+**Watching it daily.** The bar is *30 closed trades*, not a fixed number of
+weeks — the gate recomputes every time you check `/stats`. Two knobs make
+"daily" practical:
+
+- `DAILY_DIGEST_ENABLED` / `DAILY_DIGEST_INTERVAL_HOURS` (default on, every
+  24h): the bot pushes a Telegram digest with the gate status and how many
+  more closed trades are needed — so you watch progress without polling.
+- `MAX_POSITION_AGE_HOURS` (default 12): a shorter max hold closes trades
+  faster, so the 30-trade sample accumulates in days rather than weeks. The
+  trade-off is real — a 12h hold is a *different strategy* than the original
+  48h, so you're validating that variant. Set it back to 48 to test the
+  original. What you **cannot** safely shortcut is `GO_LIVE_MIN_TRADES`
+  itself — lowering it to force an early "READY" just means judging on noise.
+
 ## Known limitations / next steps
 
 - The pump.fun and Birdeye `token_security` payload shapes here follow

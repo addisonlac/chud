@@ -10,7 +10,13 @@ import { TradingOrchestrator } from "./pipeline/orchestrator.js";
 import { createServer } from "./server/webhookServer.js";
 import { getWalletKeypair, getSolBalance, getConnection } from "./execution/wallet.js";
 import { TelegramNotifier } from "./notify/telegram.js";
-import { TelegramCommandListener, formatStatusReply, formatStatsReply, formatPositionsReply } from "./notify/telegramCommands.js";
+import {
+  TelegramCommandListener,
+  formatStatusReply,
+  formatStatsReply,
+  formatPositionsReply,
+  formatDailyDigest,
+} from "./notify/telegramCommands.js";
 import { marketContext } from "./data/marketContext.js";
 import { getTrendingTokenMints } from "./data/birdeye.js";
 
@@ -141,6 +147,22 @@ async function main(): Promise<void> {
   });
   commandListener.start();
 
+  // Daily digest: push go-live-gate progress to Telegram on a timer so the
+  // strategy can be watched daily without polling anything.
+  let digestTimer: NodeJS.Timeout | null = null;
+  if (env.DAILY_DIGEST_ENABLED) {
+    const sendDigest = async () => {
+      const stats = tradeLog.getStats();
+      const goLive = evaluateGoLiveReadiness(stats, {
+        minTrades: env.GO_LIVE_MIN_TRADES,
+        minExpectancyPct: env.GO_LIVE_MIN_EXPECTANCY_PCT,
+      });
+      await telegram.notifyDailyDigest(formatDailyDigest(stats, goLive, env.GO_LIVE_MIN_TRADES));
+    };
+    digestTimer = setInterval(() => void sendDigest(), env.DAILY_DIGEST_INTERVAL_HOURS * 60 * 60 * 1000);
+    log.info({ everyHours: env.DAILY_DIGEST_INTERVAL_HOURS }, "daily digest scheduled (Telegram)");
+  }
+
   const app = createServer({ portfolio, positionStore, tradeLog });
   const server = app.listen(env.PORT, () => log.info({ port: env.PORT }, "webhook/status server listening"));
   server.on("error", (err: NodeJS.ErrnoException) => {
@@ -165,6 +187,7 @@ async function main(): Promise<void> {
     orchestrator.stop();
     whalePoller.stop();
     commandListener.stop();
+    if (digestTimer) clearInterval(digestTimer);
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

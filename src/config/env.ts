@@ -83,6 +83,11 @@ const envSchema = z.object({
   // must clear ALL of these before it's honest to risk real money.
   GO_LIVE_MIN_TRADES: numFromString(30), // minimum closed trades for statistical meaning
   GO_LIVE_MIN_EXPECTANCY_PCT: numFromString(1), // required expectancy per trade, AFTER costs (%)
+  // Daily digest: the bot pushes a once-a-<interval> summary to Telegram —
+  // go-live gate status + progress toward GO_LIVE_MIN_TRADES — so you can
+  // watch it daily without polling. Needs TELEGRAM_* set.
+  DAILY_DIGEST_ENABLED: boolFromString(true),
+  DAILY_DIGEST_INTERVAL_HOURS: numFromString(24),
 
   // Entry gates. Defaults are tuned for PAPER data-collection: permissive
   // enough that the pipeline actually takes trades (so /stats accumulates
@@ -93,7 +98,11 @@ const envSchema = z.object({
   MAX_RISK_PCT_PER_TRADE: numFromString(0.02),
   STOP_LOSS_PCT: numFromString(0.2),
   TRAILING_STOP_PCT: numFromString(0.25),
-  MAX_POSITION_AGE_HOURS: numFromString(48),
+  // Max hold. Lowered 48 -> 12 so trades close and hit the ledger faster,
+  // accumulating the 30 closed trades the go-live gate needs in days instead
+  // of weeks. NOTE: this changes the strategy you're validating (a 12h-hold
+  // variant, not the original 48h). Set back to 48 to test the original.
+  MAX_POSITION_AGE_HOURS: numFromString(12),
   MIN_SOL_RESERVE: numFromString(0.5),
 
   // --- Profit-taking / stop-tightening (exit-rule overhaul) ---

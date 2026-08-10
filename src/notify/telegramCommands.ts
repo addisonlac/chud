@@ -74,6 +74,26 @@ export function formatStatsReply(stats: TradeStats, goLive?: GoLiveReadiness): s
   return lines.join("\n");
 }
 
+/**
+ * Once-a-day push summarizing paper progress toward the go-live gate. Reuses
+ * the /stats rendering and adds a headline: how many more closed trades until
+ * the gate can even be judged, so "check daily" is effortless. Pure.
+ */
+export function formatDailyDigest(stats: TradeStats, goLive: GoLiveReadiness, minTrades: number): string {
+  const header = "📅 Daily paper-trading digest";
+  if (stats.totalTrades === 0) {
+    return `${header}\n\nNo closed trades yet. The go-live gate needs ${minTrades}. Hang tight — trades log as positions close.`;
+  }
+
+  const remaining = Math.max(0, minTrades - stats.totalTrades);
+  const progress =
+    remaining > 0
+      ? `${remaining} more closed trade${remaining === 1 ? "" : "s"} until the gate can be judged (${stats.totalTrades}/${minTrades}).`
+      : `Sample size reached (${stats.totalTrades}/${minTrades}) — the gate verdict below is now meaningful.`;
+
+  return `${header}\n\n${formatStatsReply(stats, goLive)}\n\n${progress}`;
+}
+
 export function formatPositionsReply(positions: Position[]): string {
   if (positions.length === 0) return "No open positions.";
 

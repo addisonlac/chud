@@ -3,12 +3,13 @@ import {
   formatStatusReply,
   formatStatsReply,
   formatPositionsReply,
+  formatDailyDigest,
   routeCommand,
   HELP_TEXT,
   type CommandHandlers,
 } from "../src/notify/telegramCommands.js";
 import type { Position, TradeSignal } from "../src/types/index.js";
-import type { TradeStats } from "../src/state/tradeLog.js";
+import { computeTradeStats, evaluateGoLiveReadiness, type TradeStats } from "../src/state/tradeLog.js";
 
 function makePosition(overrides: Partial<Position> = {}): Position {
   const signal: TradeSignal = {
@@ -95,6 +96,33 @@ describe("formatStatsReply", () => {
   it("surfaces the small-sample warning when present", () => {
     const reply = formatStatsReply(makeStats({ sampleSizeWarning: "Only 3 closed trade(s)..." }));
     expect(reply).toContain("⚠️");
+  });
+});
+
+describe("formatDailyDigest", () => {
+  const goLive = (stats: TradeStats) =>
+    evaluateGoLiveReadiness(stats, { minTrades: 30, minExpectancyPct: 1 });
+
+  it("says how many trades remain when the sample is still too small", () => {
+    const stats = makeStats({ totalTrades: 12, calibrationBuckets: [] });
+    const digest = formatDailyDigest(stats, goLive(stats), 30);
+    expect(digest).toContain("Daily paper-trading digest");
+    expect(digest).toContain("18 more closed trades"); // 30 - 12
+    expect(digest).toContain("(12/30)");
+  });
+
+  it("notes when the sample size is reached so the verdict is meaningful", () => {
+    const stats = makeStats({ totalTrades: 40 });
+    const digest = formatDailyDigest(stats, goLive(stats), 30);
+    expect(digest).toContain("Sample size reached");
+    expect(digest).toMatch(/GO-LIVE GATE/);
+  });
+
+  it("handles an empty ledger", () => {
+    const stats = computeTradeStats([]);
+    const digest = formatDailyDigest(stats, goLive(stats), 30);
+    expect(digest).toMatch(/no closed trades/i);
+    expect(digest).toContain("30");
   });
 });
 
