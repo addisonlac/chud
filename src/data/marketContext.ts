@@ -1,11 +1,10 @@
-import { getTokenOverview } from "./birdeye.js";
+import { fetchSolPriceUsd } from "./solPrice.js";
 import { fetchCryptoNews } from "../news/newsApi.js";
 import { childLogger } from "../utils/logger.js";
 import type { NewsItem } from "../types/index.js";
 
 const log = childLogger("market-context");
 
-const SOL_MINT = "So11111111111111111111111111111111111111112";
 const SOL_PRICE_TTL_MS = 30_000;
 const NEWS_TTL_MS = 5 * 60_000;
 
@@ -24,14 +23,14 @@ class MarketContext {
 
   async getSolPriceUsd(): Promise<number> {
     if (Date.now() - this.solPriceFetchedAt < SOL_PRICE_TTL_MS) return this.solPriceUsd;
-    // Mark the attempt time BEFORE fetching so a failure (e.g. a Birdeye
-    // 429) still backs off for the full TTL instead of retrying on every
-    // single token event — which otherwise turns one 429 into a storm.
+    // Mark the attempt time BEFORE fetching so a failure still backs off for
+    // the full TTL instead of retrying on every single token event — which
+    // otherwise turns one failure into a storm.
     this.solPriceFetchedAt = Date.now();
 
     try {
-      const overview = await getTokenOverview(SOL_MINT);
-      if (overview.priceUsd > 0) this.solPriceUsd = overview.priceUsd;
+      const price = await fetchSolPriceUsd();
+      if (price > 0) this.solPriceUsd = price;
     } catch (err) {
       log.warn({ err: (err as Error).message }, "failed to refresh SOL price, using stale value");
     }

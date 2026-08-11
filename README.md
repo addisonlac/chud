@@ -26,7 +26,9 @@ via Jupiter under a fixed set of risk rules.
    authority, excessive holder/creator concentration, a Token-2022
    transfer-fee extension, or thin liquidity, *before* spending any
    candle/news/AI budget on it.
-4. **Market data** — pull 5m / 1h / 1d candles from Birdeye.
+4. **Market data** — pull 5m / 1h / 1d candles from Birdeye. (The SOL/USD
+   price is fetched separately from keyless Coinbase/CoinGecko, so it never
+   burns the Birdeye rate limit.)
 5. **Sentiment** — pull recent crypto news and run sentiment analysis with
    a free-tier Groq-hosted model (default: Llama 3.1 8B).
 6. **Whale tracking** — track the top 50 watched wallets by polling the
@@ -181,6 +183,7 @@ src/
     filters.ts              market-cap filter (rule #2)
   data/
     birdeye.ts               candles (5m/1h/1d), token overview, top holders, token security
+    solPrice.ts               SOL/USD via keyless Coinbase + CoinGecko (no Birdeye, no key)
     marketContext.ts          cached SOL price + crypto news (shared across evals)
   safety/rugCheck.ts        hard pre-trade rug/safety gate (rule #3)
   news/newsApi.ts            NewsAPI client

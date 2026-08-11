@@ -24,6 +24,13 @@ const envSchema = z.object({
 
   BIRDEYE_API_KEY: z.string().optional().default(""),
   BIRDEYE_BASE_URL: z.string().default("https://public-api.birdeye.so"),
+
+  // SOL/USD price comes from these keyless public APIs (Coinbase primary,
+  // CoinGecko fallback) instead of Birdeye's rate-limited token_overview.
+  // Both are free, need no API key, and — behind the 30s price cache — get
+  // queried ~twice a minute, far under any published limit.
+  COINBASE_SPOT_URL: z.string().default("https://api.coinbase.com/v2/prices/SOL-USD/spot"),
+  COINGECKO_PRICE_URL: z.string().default("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"),
   // Minimum gap between Birdeye requests, to stay under the free tier's
   // rate limit (raise if you still see 429s; lower on a paid plan).
   BIRDEYE_MIN_REQUEST_INTERVAL_MS: numFromString(1200),
