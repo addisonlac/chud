@@ -6,3 +6,4 @@ data/*.json
 !data/.gitkeep
 .DS_Store
 coverage/
+overlay.html

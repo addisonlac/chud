@@ -16,7 +16,12 @@
     "test:watch": "vitest",
     "test:scanner": "tsx scripts/test-scanner.ts",
     "backtest": "tsx scripts/backtest.ts",
-    "demo:exits": "tsx scripts/exit-rules-demo.ts"
+    "demo:exits": "tsx scripts/exit-rules-demo.ts",
+    "signal": "tsx scripts/stock-analyze.ts",
+    "signal:backtest": "tsx scripts/stock-backtest.ts",
+    "signal:fixtures": "tsx scripts/build-fixtures.ts",
+    "signal:overlay": "tsx scripts/build-overlay.ts",
+    "webhook": "tsx scripts/tv-webhook.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.4",

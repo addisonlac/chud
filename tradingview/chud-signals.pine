@@ -1,0 +1,136 @@
+//@version=5
+// =============================================================================
+// CHUD Signals — liquidity-sweep + market-structure overlay (1h entry / 4h bias)
+//
+// A faithful TradingView port of the bot's engine (src/signals). Put it on a 1h
+// chart; it reads the 4h bias with request.security and draws, right on price:
+//   • market structure   — BOS (continuation) and CHoCH (reversal) labels
+//   • liquidity sweeps    — stop-hunt wicks through prior swing highs/lows
+//   • order blocks        — the origin candle of a structure break (demand/supply)
+//   • fair value gaps     — 3-bar imbalances
+//   • BUY / SELL markers   — a sweep that agrees with the 4h bias
+//
+// The BUY/SELL alertconditions emit a JSON payload you can point a TradingView
+// webhook at — send it to the bot's webhook server (npm run webhook) so the
+// alert flows straight into Telegram / your logs.
+// =============================================================================
+indicator("CHUD Signals (sweeps + 1h/4h SMC)", overlay=true, max_boxes_count=200, max_labels_count=300, max_lines_count=200)
+
+// ---- Inputs ----------------------------------------------------------------
+grpS = "Structure"
+swingLen   = input.int(2, "Swing strength (pivot bars each side)", minval=1, maxval=5, group=grpS)
+grpB = "Higher-timeframe bias"
+htfTf      = input.timeframe("240", "Bias timeframe", group=grpB)
+emaLen     = input.int(50, "Bias EMA length", group=grpB)
+grpV = "Draw"
+showOB     = input.bool(true,  "Order blocks", group=grpV)
+showFVG    = input.bool(true,  "Fair value gaps", group=grpV)
+showSweep  = input.bool(true,  "Liquidity sweeps", group=grpV)
+showStruct = input.bool(true,  "BOS / CHoCH labels", group=grpV)
+
+cBull = color.new(color.teal, 0)
+cBear = color.new(color.red, 0)
+cOBb  = color.new(color.teal, 80)
+cOBs  = color.new(color.red, 80)
+cFVGb = color.new(color.green, 85)
+cFVGs = color.new(color.maroon, 85)
+
+// ---- 4h bias ---------------------------------------------------------------
+// Bias = where the 4h close sits relative to its EMA. Longs only in a bullish
+// bias, shorts only in a bearish one — the same top-down rule the engine uses.
+htfClose = request.security(syminfo.tickerid, htfTf, close, lookahead=barmerge.lookahead_off)
+htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, emaLen), lookahead=barmerge.lookahead_off)
+bullBias = htfClose > htfEma
+bearBias = htfClose < htfEma
+
+// ---- Swings (confirmed swingLen bars back) ---------------------------------
+ph = ta.pivothigh(swingLen, swingLen)
+pl = ta.pivotlow(swingLen, swingLen)
+
+var float lastPH = na          // most recent confirmed swing-high price
+var float lastPL = na          // most recent confirmed swing-low price
+var int   trendDir = 0         // 1 bullish, -1 bearish, 0 undefined
+var float refHigh = na         // structure reference levels (consumed when broken)
+var float refLow  = na
+
+if not na(ph)
+    lastPH := ph
+    refHigh := ph
+if not na(pl)
+    lastPL := pl
+    refLow := pl
+
+// ---- Structure: BOS / CHoCH ------------------------------------------------
+bosUp = false
+bosDn = false
+if not na(refHigh) and close > refHigh
+    bosUp := true
+    isChoch = trendDir <= 0
+    trendDir := 1
+    refHigh := na
+    if showStruct
+        label.new(bar_index, high, isChoch ? "CHoCH" : "BOS", style=label.style_label_down, color=cBull, textcolor=color.white, size=size.tiny)
+if not na(refLow) and close < refLow
+    bosDn := true
+    isChoch = trendDir >= 0
+    trendDir := -1
+    refLow := na
+    if showStruct
+        label.new(bar_index, low, isChoch ? "CHoCH" : "BOS", style=label.style_label_up, color=cBear, textcolor=color.white, size=size.tiny)
+
+// ---- Liquidity sweeps (stop hunts) -----------------------------------------
+// Buy-side: wick over a prior swing high but close back below it (traps buyers → bearish).
+// Sell-side: wick under a prior swing low but close back above it (traps sellers → bullish).
+rng = high - low
+buyStop  = showSweep and not na(lastPH) and high > lastPH and close < lastPH and rng > 0 and (high - math.max(open, close)) / rng > 0.3
+sellStop = showSweep and not na(lastPL) and low  < lastPL and close > lastPL and rng > 0 and (math.min(open, close) - low) / rng > 0.3
+
+plotshape(buyStop,  title="Buy-side sweep",  style=shape.xcross,   location=location.abovebar, color=cBear, size=size.tiny)
+plotshape(sellStop, title="Sell-side sweep", style=shape.xcross,   location=location.belowbar, color=cBull, size=size.tiny)
+
+// ---- Order blocks (origin candle of the break) -----------------------------
+if showOB and bosUp
+    // last down candle in the prior 15 bars
+    idx = -1
+    for i = 1 to 15
+        if close[i] < open[i]
+            idx := i
+            break
+    if idx >= 0
+        box.new(bar_index[idx], high[idx], bar_index + 10, low[idx], border_color=cBull, bgcolor=cOBb)
+if showOB and bosDn
+    idx = -1
+    for i = 1 to 15
+        if close[i] > open[i]
+            idx := i
+            break
+    if idx >= 0
+        box.new(bar_index[idx], high[idx], bar_index + 10, low[idx], border_color=cBear, bgcolor=cOBs)
+
+// ---- Fair value gaps -------------------------------------------------------
+if showFVG and low > high[2]
+    box.new(bar_index[2], low, bar_index + 5, high[2], border_color=na, bgcolor=cFVGb)
+if showFVG and high < low[2]
+    box.new(bar_index[2], low[2], bar_index + 5, high, border_color=na, bgcolor=cFVGs)
+
+// ---- Entry signals: sweep that agrees with the 4h bias ---------------------
+buySignal  = sellStop and bullBias
+sellSignal = buyStop  and bearBias
+
+plotshape(buySignal,  title="BUY",  style=shape.triangleup,   location=location.belowbar, color=cBull, size=size.small, text="BUY")
+plotshape(sellSignal, title="SELL", style=shape.triangledown, location=location.abovebar, color=cBear, size=size.small, text="SELL")
+
+barcolor(buySignal ? cBull : sellSignal ? cBear : na)
+
+// ---- Webhook-ready alerts --------------------------------------------------
+// Create an alert on this indicator, condition "Any alert() function call", and
+// paste your webhook URL. The JSON below is what the bot's webhook server reads.
+if buySignal
+    alert('{"source":"chud-signals","symbol":"' + syminfo.ticker + '","action":"BUY","price":' + str.tostring(close) + ',"tf":"' + timeframe.period + '"}', alert.freq_once_per_bar_close)
+if sellSignal
+    alert('{"source":"chud-signals","symbol":"' + syminfo.ticker + '","action":"SELL","price":' + str.tostring(close) + ',"tf":"' + timeframe.period + '"}', alert.freq_once_per_bar_close)
+
+// Static-message alertconditions (alternative to alert()): they appear in the
+// alert dialog and also support {{ticker}}/{{close}} substitution for webhooks.
+alertcondition(buySignal,  title="CHUD BUY",  message='{"source":"chud-signals","symbol":"{{ticker}}","action":"BUY","price":{{close}}}')
+alertcondition(sellSignal, title="CHUD SELL", message='{"source":"chud-signals","symbol":"{{ticker}}","action":"SELL","price":{{close}}}')
