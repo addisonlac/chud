@@ -6,11 +6,12 @@
  *   npx tsx scripts/build-fixtures.ts
  *
  * Each raw file is the verbatim tool JSON: { data: { results: [ { symbol,
- * bars: [ { begins_at, open_price, ... } ] } ] } }. We keep only regular-hours,
- * non-interpolated bars, convert to the engine's Bar shape (unix seconds), and
- * roll the 1h series up to 4h so every fixture carries both timeframes the
- * engine expects. Using aggregated 4h (rather than the broker's native 4h)
- * matches the keyless live path, so backtest and live behave identically.
+ * bars: [ { begins_at, open_price, ... } ] } ] } } from a MINUTE-interval
+ * historicals pull. We keep only regular-hours, non-interpolated bars, convert
+ * to the engine's Bar shape (unix seconds), and roll the 1m series up to 15m so
+ * every fixture carries both timeframes the engine expects (ltf = 1m entry,
+ * htf = 15m bias). Rolling to 15m (rather than a broker's native 15m) matches
+ * the keyless live path, so backtest and live behave identically.
  */
 import { readFile, writeFile, readdir, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -66,21 +67,21 @@ async function main() {
       continue;
     }
     const symbol = result.symbol.toUpperCase();
-    const h1 = toBars(result.bars);
-    const h4 = aggregateBars(h1, 4);
-    if (h1.length < 30) {
-      console.log(`  ${symbol}: only ${h1.length} 1h bars — skipped (need ≥30)`);
+    const ltf = toBars(result.bars);
+    const htf = aggregateBars(ltf, 15);
+    if (ltf.length < 60) {
+      console.log(`  ${symbol}: only ${ltf.length} 1m bars — skipped (need ≥60)`);
       continue;
     }
     const fixture = {
       symbol,
       fetchedAt: new Date().toISOString(),
-      source: "robinhood:get_equity_historicals(hour)",
-      h1,
-      h4,
+      source: "robinhood:get_equity_historicals(minute)→15m",
+      ltf,
+      htf,
     };
     await writeFile(path.join(OUT_DIR, `${symbol}.json`), JSON.stringify(fixture));
-    console.log(`  ${symbol}: ${h1.length} 1h → ${h4.length} 4h bars`);
+    console.log(`  ${symbol}: ${ltf.length} 1m → ${htf.length} 15m bars`);
     built.push(symbol);
   }
 

@@ -1,17 +1,22 @@
 // ---------------------------------------------------------------------------
 // Stock OHLCV data access for the signal engine.
 //
-// The engine needs a 1h and a 4h series per symbol. Data access is pluggable:
+// The engine works two timeframes: a 1-minute ENTRY series (ltf) and a
+// 15-minute BIAS series (htf). Data access is pluggable:
 //
-//   • YahooProvider   — keyless public feed (query1.finance.yahoo.com). Works
-//                        anywhere outbound HTTPS to Yahoo is allowed; the 4h
-//                        series is rolled up from 1h. Good for live use.
+//   • YahooProvider   — keyless public feed (query1.finance.yahoo.com). Fetches
+//                        native 1m and 15m bars. Works anywhere outbound HTTPS
+//                        to Yahoo is allowed; good for live use on a normal
+//                        network. (TradingView has no keyless historical API, so
+//                        it is the chart/alert surface — Pine + webhook — while
+//                        Yahoo supplies the candles the engine reasons over.)
 //   • FixtureProvider — reads pre-saved JSON candle files from data/fixtures.
 //                        Deterministic, offline, and what the backtest uses so
 //                        results are reproducible and don't depend on the feed.
 //
-// A broker feed with native 4h bars (e.g. the Robinhood MCP used to build the
-// fixtures) is preferable to rolled-up 4h; FixtureProvider carries those.
+// The committed fixtures were seeded once, offline, from Robinhood minute bars
+// (the one intraday feed reachable where they were built); at runtime nothing
+// depends on Robinhood.
 // ---------------------------------------------------------------------------
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -19,9 +24,10 @@ import { fetchJson } from "../utils/http.js";
 import { aggregateBars, normalize } from "../signals/candles.js";
 import type { Bar } from "../signals/types.js";
 
+/** ltf = 1-minute entry series, htf = 15-minute bias series. */
 export interface Series {
-  h1: Bar[];
-  h4: Bar[];
+  ltf: Bar[];
+  htf: Bar[];
 }
 
 export interface StockDataProvider {
@@ -31,13 +37,13 @@ export interface StockDataProvider {
 
 export const FIXTURE_DIR = path.resolve("data/fixtures");
 
-/** On-disk fixture shape (also what scripts/fetch-fixtures writes). */
+/** On-disk fixture shape (also what scripts/build-fixtures writes). */
 export interface Fixture {
   symbol: string;
   fetchedAt: string;
   source: string;
-  h1: Bar[];
-  h4: Bar[];
+  ltf: Bar[];
+  htf: Bar[];
 }
 
 // --- Fixtures --------------------------------------------------------------
@@ -50,7 +56,7 @@ export class FixtureProvider implements StockDataProvider {
     const file = path.join(this.dir, `${symbol.toUpperCase()}.json`);
     const raw = await readFile(file, "utf-8");
     const fx = JSON.parse(raw) as Fixture;
-    return { h1: normalize(fx.h1 ?? []), h4: normalize(fx.h4 ?? []) };
+    return { ltf: normalize(fx.ltf ?? []), htf: normalize(fx.htf ?? []) };
   }
 }
 
@@ -68,15 +74,23 @@ interface YahooChart {
 
 export class YahooProvider implements StockDataProvider {
   readonly name = "yahoo";
-  constructor(private readonly range = "60d") {}
+  // 1m history is capped by Yahoo at ~7 days; 15m reaches ~60 days.
+  constructor(
+    private readonly entryRange = "5d",
+    private readonly biasRange = "1mo",
+  ) {}
 
   async getSeries(symbol: string): Promise<Series> {
-    const h1 = await this.fetch1h(symbol);
-    return { h1, h4: aggregateBars(h1, 4) };
+    const ltf = await this.fetchBars(symbol, "1m", this.entryRange);
+    // Prefer native 15m for a longer, cleaner bias series; fall back to rolling
+    // the 1m entry series up if the 15m fetch comes back empty.
+    let htf = await this.fetchBars(symbol, "15m", this.biasRange).catch(() => [] as Bar[]);
+    if (htf.length === 0) htf = aggregateBars(ltf, 15);
+    return { ltf, htf };
   }
 
-  private async fetch1h(symbol: string): Promise<Bar[]> {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${this.range}&interval=1h`;
+  private async fetchBars(symbol: string, interval: string, range: string): Promise<Bar[]> {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
     const data = await fetchJson<YahooChart>(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; chud-signals/1.0)" },
       timeoutMs: 12_000,
@@ -110,7 +124,7 @@ export function defaultProvider(): StockDataProvider {
     async getSeries(symbol: string): Promise<Series> {
       try {
         const fx = await fixtures.getSeries(symbol);
-        if (fx.h1.length > 0) return fx;
+        if (fx.ltf.length > 0) return fx;
       } catch {
         /* no fixture — fall through to live */
       }

@@ -73,9 +73,9 @@ app.post("/tradingview", async (req, res) => {
   // Enrich with the engine's own read so the notification is actionable.
   let message = `📡 TradingView alert: ${alert.action} ${alert.symbol}${alert.price ? ` @ ${alert.price}` : ""}`;
   try {
-    const { h1, h4 } = await defaultProvider().getSeries(alert.symbol.toUpperCase());
-    if (h1.length > 0) {
-      const sig = analyze(alert.symbol.toUpperCase(), h1, h4);
+    const { ltf, htf } = await defaultProvider().getSeries(alert.symbol.toUpperCase());
+    if (ltf.length > 0) {
+      const sig = analyze(alert.symbol.toUpperCase(), ltf, htf);
       log.info(summarize(sig));
       message = `📡 ${alert.symbol} — TradingView says ${alert.action}\n\n${formatSignal(sig)}`;
     }

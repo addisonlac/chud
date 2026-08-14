@@ -6,10 +6,11 @@ the trade with a free-tier Groq-hosted LLM, and (optionally) auto-executes
 via Jupiter under a fixed set of risk rules.
 
 > 📈 **Also in this repo: [CHUD Signals](SIGNALS.md)** — an AI share-trading
-> signal bot that reads liquidity sweeps + 1h/4h market structure, tells you
-> when to buy/sell and how many **shares**, breaks the reasoning down step by
-> step, ships a TradingView overlay, and backtests on the past month's top
-> stocks. Start with `npm run signal -- NVDA` or `npm run signal:overlay`.
+> signal bot that reads liquidity sweeps + market structure on the **1-minute
+> entry / 15-minute bias** charts, gated to the session's high-liquidity window,
+> tells you when to buy/sell and how many **shares**, breaks the reasoning down
+> step by step, and ships a **TradingView** overlay + webhook. Start with
+> `npm run signal -- NVDA` or `npm run signal:overlay`.
 
 > **Runs entirely on free-tier services.** Groq (AI scoring/sentiment) and
 > the public Solana RPC (whale tracking) require no payment method. See

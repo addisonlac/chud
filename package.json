@@ -20,6 +20,7 @@
     "signal": "tsx scripts/stock-analyze.ts",
     "signal:backtest": "tsx scripts/stock-backtest.ts",
     "signal:fixtures": "tsx scripts/build-fixtures.ts",
+    "signal:demo-fixtures": "tsx scripts/gen-demo-fixtures.ts",
     "signal:overlay": "tsx scripts/build-overlay.ts",
     "webhook": "tsx scripts/tv-webhook.ts"
   },

@@ -25,18 +25,18 @@ async function main() {
   }
 
   const provider = defaultProvider();
-  const { h1, h4 } = await provider.getSeries(symbol);
-  if (h1.length === 0) {
+  const { ltf, htf } = await provider.getSeries(symbol);
+  if (ltf.length === 0) {
     console.error(`No data for ${symbol} (no fixture and live feed returned nothing).`);
     process.exit(1);
   }
 
-  const signal = analyze(symbol, h1, h4);
+  const signal = analyze(symbol, ltf, htf);
   if (asJson) {
     console.log(JSON.stringify(signal, null, 2));
     return;
   }
-  console.log(`\nSource: ${provider.name}   (1h bars: ${h1.length}, 4h bars: ${h4.length})   risk/trade: $${riskUsd}\n`);
+  console.log(`\nSource: ${provider.name}   (1m bars: ${ltf.length}, 15m bars: ${htf.length})   risk/trade: $${riskUsd}\n`);
   console.log(formatSignal(signal, riskUsd));
   console.log("");
 }

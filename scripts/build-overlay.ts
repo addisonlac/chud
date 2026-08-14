@@ -1,7 +1,7 @@
 /**
  * Build the visual "overlay": a self-contained HTML dashboard that analyses each
  * stock for the day and breaks the reasoning down step by step, with an
- * annotated 1h candlestick chart (liquidity sweep, order block, FVG, structure
+ * annotated 1m candlestick chart (liquidity sweep, order block, FVG, structure
  * break, entry/stop/targets drawn on price).
  *
  *   npx tsx scripts/build-overlay.ts                 # all fixtures → overlay.html
@@ -19,8 +19,8 @@ import { aggregateBars } from "../src/signals/candles.js";
 import { sizeShares, DEFAULT_RISK_USD } from "../src/signals/sizing.js";
 import type { Bar, Signal } from "../src/signals/types.js";
 
-const SHOW_BARS = 64; // 1h bars drawn on each chart
-const WARMUP = 54; // don't analyse before this many bars exist
+const SHOW_BARS = 90; // 1m bars drawn on each chart (≈1.5h of the entry timeframe)
+const WARMUP = 240; // 1m bars before the first read (enough to build the 15m bias series)
 const RISK_USD = Number(process.env.RISK_USD) || DEFAULT_RISK_USD; // $ risk/trade used for share sizing
 
 /**
@@ -30,20 +30,20 @@ const RISK_USD = Number(process.env.RISK_USD) || DEFAULT_RISK_USD; // $ risk/tra
  * right edge). If the engine never fired in the window, fall back to the
  * current — honestly WAIT — read on the full series.
  */
-function latestActionable(symbol: string, h1: Bar[]): { sig: Signal; bars: Bar[] } {
-  for (let i = h1.length - 1; i >= WARMUP; i--) {
-    const seen = h1.slice(0, i + 1);
-    const sig = analyze(symbol, seen, aggregateBars(seen, 4));
+function latestActionable(symbol: string, ltf: Bar[]): { sig: Signal; bars: Bar[] } {
+  for (let i = ltf.length - 1; i >= WARMUP; i--) {
+    const seen = ltf.slice(0, i + 1);
+    const sig = analyze(symbol, seen, aggregateBars(seen, 15));
     if (sig.action !== "WAIT") return { sig, bars: seen };
   }
-  return { sig: analyze(symbol, h1, aggregateBars(h1, 4)), bars: h1 };
+  return { sig: analyze(symbol, ltf, aggregateBars(ltf, 15)), bars: ltf };
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const f2 = (n: number) => n.toFixed(2);
 
 // ---- annotated candlestick chart (inline SVG) ------------------------------
-function chart(sig: Signal, h1: Bar[]): string {
+function chart(sig: Signal, ltf: Bar[]): string {
   const W = 720;
   const H = 320;
   const padL = 8;
@@ -53,8 +53,8 @@ function chart(sig: Signal, h1: Bar[]): string {
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
-  const start = Math.max(0, h1.length - SHOW_BARS);
-  const bars = h1.slice(start);
+  const start = Math.max(0, ltf.length - SHOW_BARS);
+  const bars = ltf.slice(start);
   const n = bars.length;
 
   const extra = [sig.entry, sig.stop, ...sig.targets, ...(sig.evidence.liquidityPools ?? []).map((p) => p.price)].filter(
@@ -147,12 +147,12 @@ function chart(sig: Signal, h1: Bar[]): string {
     sig.targets.forEach((t, i) => level(t, "target", `TP${i + 1}`));
   }
 
-  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(sig.symbol)} 1h chart with annotated setup" preserveAspectRatio="xMidYMid meet">${parts.join("")}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(sig.symbol)} 1m chart with annotated setup" preserveAspectRatio="xMidYMid meet">${parts.join("")}</svg>`;
 }
 
 const VERDICT_DOT: Record<string, string> = { bullish: "v-bull", bearish: "v-bear", neutral: "v-neutral", info: "v-info" };
 
-function card(sig: Signal, h1: Bar[]): string {
+function card(sig: Signal, ltf: Bar[]): string {
   const conf = Math.round(sig.confidence * 100);
   const actionClass = sig.action === "BUY" ? "buy" : sig.action === "SELL" ? "sell" : "wait";
   const size = sizeShares(sig, RISK_USD);
@@ -193,12 +193,12 @@ function card(sig: Signal, h1: Bar[]): string {
         <span class="confnum">${conf}%</span>
       </div>
       <div class="biaschips">
-        <span class="bchip t-${sig.htfTrend}">4h ${sig.htfTrend}</span>
-        <span class="bchip t-${sig.ltfTrend}">1h ${sig.ltfTrend}</span>
+        <span class="bchip t-${sig.htfTrend}">15m ${sig.htfTrend}</span>
+        <span class="bchip t-${sig.ltfTrend}">1m ${sig.ltfTrend}</span>
       </div>
     </div>
     <div class="when">⏱ ${esc(new Date(sig.generatedAt * 1000).toISOString().slice(0, 16).replace("T", " "))} UTC</div>
-    ${chart(sig, h1)}
+    ${chart(sig, ltf)}
     ${plan}
     <ol class="steps">${steps}</ol>
   </article>`;
@@ -212,7 +212,7 @@ function page(cards: string, meta: { asOf: string; count: number; buys: number; 
 <main class="wrap">
   <header class="masthead">
     <div class="brand"><span class="glyph">⧉</span> CHUD Signals</div>
-    <p class="tagline">Liquidity-sweep + market-structure read across the 1h and 4h. Each card shows a stock's most recent actionable signal — the setup drawn on price, the trade plan, and the reasoning scored step by step. The timestamp is when the signal fired.</p>
+    <p class="tagline">Liquidity-sweep + market-structure read on the 1-minute entry chart with a 15-minute bias, gated to the session's high-liquidity window. Each card shows a stock's most recent actionable signal — the setup drawn on price, the trade plan, and the reasoning scored step by step. The timestamp is when the signal fired.</p>
     <div class="summary">
       <div class="scard"><span class="snum">${meta.count}</span><span class="slab">stocks</span></div>
       <div class="scard buy"><span class="snum">${meta.buys}</span><span class="slab">buy</span></div>
@@ -349,18 +349,18 @@ async function main() {
 
   let latestBarTime = 0;
   for (const symbol of symbols) {
-    let h1: Bar[];
+    let ltf: Bar[];
     try {
-      ({ h1 } = await new FixtureProvider().getSeries(symbol));
+      ({ ltf } = await new FixtureProvider().getSeries(symbol));
     } catch {
-      ({ h1 } = await defaultProvider().getSeries(symbol));
+      ({ ltf } = await defaultProvider().getSeries(symbol));
     }
-    if (h1.length === 0) {
+    if (ltf.length === 0) {
       console.warn(`skip ${symbol}: no data`);
       continue;
     }
-    latestBarTime = Math.max(latestBarTime, h1[h1.length - 1]!.time);
-    const { sig, bars } = latestActionable(symbol, h1);
+    latestBarTime = Math.max(latestBarTime, ltf[ltf.length - 1]!.time);
+    const { sig, bars } = latestActionable(symbol, ltf);
     if (sig.action === "BUY") buys++;
     else if (sig.action === "SELL") sells++;
     else waits++;

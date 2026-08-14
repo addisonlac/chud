@@ -16,7 +16,7 @@ export function formatSignal(sig: Signal, riskUsd = DEFAULT_RISK_USD): string {
   const size = sizeShares(sig, riskUsd);
   const shareWord = sig.action === "WAIT" ? "" : ` ${size.shares} share${size.shares === 1 ? "" : "s"}`;
   lines.push(`${ACTION_ICON[sig.action]}${shareWord}  ${sig.symbol}  @ ${sig.price.toFixed(2)}   confidence ${conf}%`);
-  lines.push(`4h bias: ${sig.htfTrend}   |   1h structure: ${sig.ltfTrend}`);
+  lines.push(`15m bias: ${sig.htfTrend}   |   1m structure: ${sig.ltfTrend}`);
 
   if (sig.action !== "WAIT" && sig.entry !== null && sig.stop !== null) {
     const tgt = sig.targets.map((t, i) => `TP${i + 1} ${t.toFixed(2)}`).join("  ");

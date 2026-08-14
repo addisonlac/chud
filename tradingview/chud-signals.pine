@@ -1,27 +1,35 @@
 //@version=5
 // =============================================================================
-// CHUD Signals — liquidity-sweep + market-structure overlay (1h entry / 4h bias)
+// CHUD Signals — liquidity-sweep + market-structure overlay (1m entry / 15m bias)
 //
-// A faithful TradingView port of the bot's engine (src/signals). Put it on a 1h
-// chart; it reads the 4h bias with request.security and draws, right on price:
+// A faithful TradingView port of the bot's engine (src/signals). Put it on a 1m
+// chart; it reads the 15m bias with request.security and draws, right on price:
 //   • market structure   — BOS (continuation) and CHoCH (reversal) labels
 //   • liquidity sweeps    — stop-hunt wicks through prior swing highs/lows
 //   • order blocks        — the origin candle of a structure break (demand/supply)
 //   • fair value gaps     — 3-bar imbalances
-//   • BUY / SELL markers   — a sweep that agrees with the 4h bias
+//   • BUY / SELL markers   — a sweep that agrees with the 15m bias, in-session
+//
+// Signals are gated to a trading window (default NY morning 09:30–12:00 ET) —
+// the same session filter the engine enforces, because 1m setups outside the
+// high-liquidity window are mostly noise.
 //
 // The BUY/SELL alertconditions emit a JSON payload you can point a TradingView
 // webhook at — send it to the bot's webhook server (npm run webhook) so the
 // alert flows straight into Telegram / your logs.
 // =============================================================================
-indicator("CHUD Signals (sweeps + 1h/4h SMC)", overlay=true, max_boxes_count=200, max_labels_count=300, max_lines_count=200)
+indicator("CHUD Signals (sweeps + 1m/15m SMC)", overlay=true, max_boxes_count=200, max_labels_count=300, max_lines_count=200)
 
 // ---- Inputs ----------------------------------------------------------------
 grpS = "Structure"
 swingLen   = input.int(2, "Swing strength (pivot bars each side)", minval=1, maxval=5, group=grpS)
 grpB = "Higher-timeframe bias"
-htfTf      = input.timeframe("240", "Bias timeframe", group=grpB)
+htfTf      = input.timeframe("15", "Bias timeframe", group=grpB)
 emaLen     = input.int(50, "Bias EMA length", group=grpB)
+grpSess = "Session"
+useSession = input.bool(true, "Only signal in-session", group=grpSess)
+sessWin    = input.session("0930-1200", "Trading window", group=grpSess)
+sessTz     = input.string("America/New_York", "Session timezone", group=grpSess)
 grpV = "Draw"
 showOB     = input.bool(true,  "Order blocks", group=grpV)
 showFVG    = input.bool(true,  "Fair value gaps", group=grpV)
@@ -35,13 +43,18 @@ cOBs  = color.new(color.red, 80)
 cFVGb = color.new(color.green, 85)
 cFVGs = color.new(color.maroon, 85)
 
-// ---- 4h bias ---------------------------------------------------------------
-// Bias = where the 4h close sits relative to its EMA. Longs only in a bullish
+// ---- 15m bias --------------------------------------------------------------
+// Bias = where the 15m close sits relative to its EMA. Longs only in a bullish
 // bias, shorts only in a bearish one — the same top-down rule the engine uses.
 htfClose = request.security(syminfo.tickerid, htfTf, close, lookahead=barmerge.lookahead_off)
 htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, emaLen), lookahead=barmerge.lookahead_off)
 bullBias = htfClose > htfEma
 bearBias = htfClose < htfEma
+
+// ---- Session gate ----------------------------------------------------------
+// 1m setups only fire inside the high-liquidity window (default NY morning).
+inSession = not useSession or not na(time(timeframe.period, sessWin, sessTz))
+bgcolor(useSession and not inSession ? color.new(color.gray, 92) : na, title="Out of session")
 
 // ---- Swings (confirmed swingLen bars back) ---------------------------------
 ph = ta.pivothigh(swingLen, swingLen)
@@ -113,9 +126,9 @@ if showFVG and low > high[2]
 if showFVG and high < low[2]
     box.new(bar_index[2], low[2], bar_index + 5, high, border_color=na, bgcolor=cFVGs)
 
-// ---- Entry signals: sweep that agrees with the 4h bias ---------------------
-buySignal  = sellStop and bullBias
-sellSignal = buyStop  and bearBias
+// ---- Entry signals: sweep that agrees with the 15m bias, in-session --------
+buySignal  = sellStop and bullBias and inSession
+sellSignal = buyStop  and bearBias and inSession
 
 plotshape(buySignal,  title="BUY",  style=shape.triangleup,   location=location.belowbar, color=cBull, size=size.small, text="BUY")
 plotshape(sellSignal, title="SELL", style=shape.triangledown, location=location.abovebar, color=cBear, size=size.small, text="SELL")

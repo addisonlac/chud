@@ -9,14 +9,15 @@ import { orderBlockForBreak } from "../src/signals/orderBlocks.js";
 import { aggregateBars } from "../src/signals/candles.js";
 import { analyze } from "../src/signals/engine.js";
 import { sizeShares } from "../src/signals/sizing.js";
+import { inSession, defaultSessionConfig } from "../src/signals/session.js";
 import type { Bar, Signal } from "../src/signals/types.js";
 
-/** Build bars from compact [high, low, close?] rows at 1h spacing. */
+/** Build bars from compact [high, low, close?] rows at 1m spacing. */
 function bars(rows: Array<[number, number] | [number, number, number]>, start = 1_700_000_000): Bar[] {
   return rows.map((r, i) => {
     const [high, low, close] = r;
     const c = close ?? (high + low) / 2;
-    return { time: start + i * 3600, open: (high + low) / 2, high, low, close: c, volume: 1000 };
+    return { time: start + i * 60, open: (high + low) / 2, high, low, close: c, volume: 1000 };
   });
 }
 
@@ -159,10 +160,34 @@ describe("share sizing", () => {
   });
 });
 
+describe("session filter", () => {
+  const cfg = defaultSessionConfig(); // NY morning 09:30–12:00 ET, Mon–Fri
+  const at = (y: number, mo: number, d: number, h: number, mi: number) => Math.floor(Date.UTC(y, mo, d, h, mi) / 1000);
+
+  it("accepts a weekday bar inside the NY morning window", () => {
+    // 2026-08-13 is a Thursday; 13:45 UTC = 09:45 ET (EDT) → in session.
+    expect(inSession(at(2026, 7, 13, 13, 45), cfg)).toBe(true);
+  });
+
+  it("rejects a weekday bar after the window closes", () => {
+    // 18:00 UTC = 14:00 ET → past the 12:00 cutoff.
+    expect(inSession(at(2026, 7, 13, 18, 0), cfg)).toBe(false);
+  });
+
+  it("rejects weekends even inside the clock window", () => {
+    // 2026-08-15 is a Saturday; 09:45 ET but not a trading day.
+    expect(inSession(at(2026, 7, 15, 13, 45), cfg)).toBe(false);
+  });
+
+  it("is a no-op when disabled", () => {
+    expect(inSession(at(2026, 7, 13, 18, 0), { ...cfg, enabled: false })).toBe(true);
+  });
+});
+
 describe("engine", () => {
   it("returns WAIT with a reason when there isn't enough history", () => {
     const short = bars(Array.from({ length: 10 }, (_, i) => [100 + i, 99 + i] as [number, number]));
-    const sig = analyze("TEST", short, aggregateBars(short, 4));
+    const sig = analyze("TEST", short, aggregateBars(short, 15));
     expect(sig.action).toBe("WAIT");
     expect(sig.reasoning.length).toBeGreaterThan(0);
   });
@@ -171,8 +196,8 @@ describe("engine", () => {
     const universe = JSON.parse(readFileSync(path.resolve("data/fixtures/universe.json"), "utf-8")) as string[];
     expect(universe.length).toBeGreaterThan(0);
     for (const sym of universe) {
-      const fx = JSON.parse(readFileSync(path.resolve(`data/fixtures/${sym}.json`), "utf-8")) as { h1: Bar[]; h4: Bar[] };
-      const sig = analyze(sym, fx.h1, fx.h4);
+      const fx = JSON.parse(readFileSync(path.resolve(`data/fixtures/${sym}.json`), "utf-8")) as { ltf: Bar[]; htf: Bar[] };
+      const sig = analyze(sym, fx.ltf, fx.htf);
       expect(["BUY", "SELL", "WAIT"]).toContain(sig.action);
       expect(sig.confidence).toBeGreaterThanOrEqual(0);
       expect(sig.confidence).toBeLessThanOrEqual(1);

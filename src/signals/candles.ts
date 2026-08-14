@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
-// Candle helpers: normalisation and the 1h → 4h roll-up used when a data feed
-// only offers hourly bars. The backtester prefers a broker's *native* 4h bars,
-// but for live use (e.g. the keyless Yahoo feed) we build the 4h series here.
+// Candle helpers: normalisation and the 1m → 15m roll-up used to build the
+// higher-timeframe bias series from a 1-minute entry feed. Buckets never span a
+// session gap, so a "15m" bar never welds the last minute of one day to the
+// first of the next.
 // ---------------------------------------------------------------------------
 import type { Bar } from "./types.js";
 
@@ -13,10 +14,10 @@ export function normalize(bars: Bar[]): Bar[] {
 }
 
 /**
- * Roll `bars` up by `factor` (e.g. four 1h bars → one 4h bar). Buckets never
+ * Roll `bars` up by `factor` (e.g. fifteen 1m bars → one 15m bar). Buckets never
  * span a session gap: when the spacing to the next bar jumps well beyond the
  * typical bar interval (overnight / weekend), the current bucket is finalised
- * so a "4h" bar never welds the close of one day to the open of the next.
+ * so a "15m" bar never welds the close of one day to the open of the next.
  */
 export function aggregateBars(bars: Bar[], factor: number): Bar[] {
   const src = normalize(bars);

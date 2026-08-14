@@ -1,21 +1,22 @@
 /**
- * Backtest the signal engine on the past month's top stocks.
+ * Backtest the signal engine on recent intraday sessions.
  *
  *   npx tsx scripts/stock-backtest.ts
  *
- * For every symbol with a fixture (data/fixtures/<SYMBOL>.json) it walks the 1h
- * series forward one bar at a time, re-deriving the 4h series from only the
- * bars seen so far (NO lookahead), and calls the exact same engine the live
- * analyzer uses. When the engine emits a BUY/SELL it "takes" the trade at that
- * bar's close and simulates forward until the stop or first target is hit
+ * For every symbol with a fixture (data/fixtures/<SYMBOL>.json) it walks the 1m
+ * entry series forward one bar at a time, re-deriving the 15m bias series from
+ * only the bars seen so far (NO lookahead), and calls the exact same engine the
+ * live analyzer uses. When the engine emits a BUY/SELL it "takes" the trade at
+ * that bar's close and simulates forward until the stop or first target is hit
  * (worst-case: if a single bar touches both, it counts as the stop), or a max
  * hold elapses. Results are reported in R-multiples (multiples of the risk
  * taken), which is the currency the risk model is built in.
  *
- * The point isn't to prove a magic win rate on 4 symbols of one month — it's to
- * show the bot recognises *proper setups* (liquidity sweep / BOS + higher-
- * timeframe alignment + a real reward:risk) on real recent price action, and to
- * give a repeatable harness you can point at any fixtures you drop in.
+ * The point isn't to prove a magic win rate on a handful of names over a few
+ * sessions — it's to show the bot recognises *proper setups* (liquidity sweep /
+ * BOS + higher-timeframe alignment + in-session + a real reward:risk) on real
+ * recent price action, and to give a repeatable harness you can point at any
+ * fixtures you drop in.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,9 +26,9 @@ import { analyze, defaultEngineConfig } from "../src/signals/engine.js";
 import { summarize } from "../src/signals/format.js";
 import type { Bar, Signal } from "../src/signals/types.js";
 
-const WARMUP = 54; // 1h bars before the first signal (≈9 sessions → ~18×4h bars)
-const MAX_HOLD = 30; // max 1h bars a trade can stay open (≈5 sessions)
-const FILL_WINDOW = 8; // a limit (pullback) entry must fill within this many bars or it's cancelled
+const WARMUP = 240; // 1m bars before the first signal (enough to build ≥15×15m bias bars)
+const MAX_HOLD = 120; // max 1m bars a trade can stay open (≈2h — an intraday scalp, not a swing)
+const FILL_WINDOW = 15; // a limit (pullback) entry must fill within this many 1m bars or it's cancelled
 
 interface Trade {
   symbol: string;
@@ -122,16 +123,16 @@ function resolveTrade(symbol: string, bars: Bar[], signalIdx: number, sig: Signa
   return { trade: { ...base, exitReason: tookPartial ? "partial" : "timeout", realizedR }, resumeIdx: end };
 }
 
-function walk(symbol: string, h1: Bar[]): Trade[] {
+function walk(symbol: string, ltf: Bar[]): Trade[] {
   const trades: Trade[] = [];
   const cfg = defaultEngineConfig();
   let i = WARMUP;
-  while (i < h1.length - 1) {
-    const seen = h1.slice(0, i + 1);
-    const h4 = aggregateBars(seen, 4);
-    const sig = analyze(symbol, seen, h4, cfg);
+  while (i < ltf.length - 1) {
+    const seen = ltf.slice(0, i + 1);
+    const htf = aggregateBars(seen, 15);
+    const sig = analyze(symbol, seen, htf, cfg);
     if (sig.action !== "WAIT") {
-      const res = resolveTrade(symbol, h1, i, sig);
+      const res = resolveTrade(symbol, ltf, i, sig);
       if (res) {
         trades.push(res.trade);
         i = Math.max(i + 1, res.resumeIdx + 1); // resume after the position closes
@@ -157,7 +158,7 @@ async function loadUniverse(): Promise<string[]> {
 }
 
 async function main() {
-  console.log("\n=== Stock signal-engine backtest (liquidity sweep + 1h/4h SMC) ===\n");
+  console.log("\n=== Stock signal-engine backtest (liquidity sweep + 1m/15m SMC) ===\n");
   const universe = await loadUniverse();
   if (universe.length === 0) {
     console.log("No fixtures. Run: npx tsx scripts/build-fixtures.ts");
@@ -168,8 +169,8 @@ async function main() {
   const all: Trade[] = [];
 
   for (const symbol of universe) {
-    const { h1 } = await provider.getSeries(symbol);
-    const trades = walk(symbol, h1);
+    const { ltf } = await provider.getSeries(symbol);
+    const trades = walk(symbol, ltf);
     all.push(...trades);
     const r = trades.reduce((s, t) => s + t.realizedR, 0);
     const wins = trades.filter((t) => t.realizedR > 0).length;
@@ -204,9 +205,9 @@ async function main() {
   console.log("─────────────────────────────────────────────");
   console.log(
     "  Read this as a RECOGNITION test, not a profitability claim: it shows the\n" +
-      "  engine only fires on disciplined, well-formed setups (4h-aligned, real\n" +
-      `  liquidity/structure trigger, ≥${defaultEngineConfig().minRiskReward}R). ${all.length} trades on ${universe.length} names in one month is far\n` +
-      "  too small to judge edge — drop more fixtures in data/fixtures to widen it.",
+      "  engine only fires on disciplined, well-formed setups (15m-aligned, real\n" +
+      `  liquidity/structure trigger, in-session, ≥${defaultEngineConfig().minRiskReward}R). ${all.length} trades on ${universe.length} names over a few\n` +
+      "  sessions is far too small to judge edge — drop more fixtures in data/fixtures to widen it.",
   );
   console.log("─────────────────────────────────────────────\n");
 

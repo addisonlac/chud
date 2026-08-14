@@ -17,7 +17,7 @@ export interface Bar {
   volume: number;
 }
 
-export type Timeframe = "1h" | "4h";
+export type Timeframe = "1m" | "15m";
 
 /** A confirmed swing pivot (fractal) — a local extreme flanked by weaker bars. */
 export interface Swing {
@@ -100,7 +100,7 @@ export type Action = "BUY" | "SELL" | "WAIT";
 
 /** One line of the human-readable "why" behind a signal. */
 export interface ReasoningStep {
-  label: string; // short heading, e.g. "4h bias"
+  label: string; // short heading, e.g. "15m bias"
   detail: string; // the explanation
   verdict: "bullish" | "bearish" | "neutral" | "info";
   weight: number; // contribution to confidence, 0..1 (0 for pure-context steps)
@@ -120,8 +120,8 @@ export interface Signal {
   targets: number[]; // TP1, TP2 (structure-based)
   riskReward: number | null; // to the first target
 
-  htfTrend: MarketTrend; // 4h bias
-  ltfTrend: MarketTrend; // 1h structure
+  htfTrend: MarketTrend; // 15m bias
+  ltfTrend: MarketTrend; // 1m structure
 
   reasoning: ReasoningStep[];
   // Raw evidence the overlay/Pine side can redraw.
