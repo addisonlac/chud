@@ -89,7 +89,9 @@ npm run webhook                        # listens on :8787/tradingview
 npm run futures -- MES                 # analyze now, sized in CONTRACTS
 npm run futures -- MNQ --risk 500
 npm run futures:fixtures               # build index fixtures from data/raw-index/
-npm run futures:backtest               # baseline vs. discipline-filtered, R + $
+npm run futures:backtest               # baseline vs. filtered vs. safe, R + $
+npm run futures:sweep                  # tune: win rate across a preset ladder
+npm run futures:hud                    # render futures-hud.html (trades on charts)
 ```
 
 Example CLI output:
@@ -128,6 +130,22 @@ runs *baseline* (raw signals) and *filtered* (guard on) side by side so you can
 see the trade-off: the guard raises win rate and profit factor and cuts trade
 count hard — it's insurance for chop, and it gives some upside back in a strongly
 trending week.
+
+**The `safe` preset (win-rate tuned).** On top of the guard, a stricter preset
+(`safePreset()` in `futuresStrategy.ts`) trades for win rate and consistency:
+**with-trend only**, **must react from an order block / FVG**, confidence ≥ 0.85,
+**bank the first target at 1R**, **opening drive only (09:30–10:30 ET)**, one loss
+ends the day. `npm run futures:sweep` shows how each knob moves win rate; `npm run
+futures:backtest` runs baseline / filtered / safe side by side.
+
+> On the validation week (Aug 10–14, MES+MNQ, $250 risk): baseline 35.8% win →
+> filtered 47.8% → **safe 71.4%** (14 trades, +5.51R, +$1,240, PF 2.38,
+> +0.39R/trade). These preset values were chosen **in-sample** — a hypothesis to
+> validate on other weeks, not a proven edge.
+
+**Visual HUD.** `npm run futures:hud` renders `futures-hud.html` — a self-contained
+page drawing the safe preset's trades on the real 1m SPX/NDX charts (BUY/SELL
+markers coloured by win/loss, entry/stop/target on price, per-day + week stats).
 
 **Data.** Futures fixtures are built from real cash-index minute bars
 (`npm run futures:fixtures`, reading `data/raw-index/`). At runtime `npm run
@@ -217,6 +235,7 @@ src/signals/
   session.ts         intraday session / kill-zone filter (time-of-day gate)
   sessionGuard.ts    discipline layer (confidence floor, trade cap, cooldown, lockout)
   instruments.ts     futures contract registry (ES/MES/NQ/MNQ point values + ticks)
+  futuresStrategy.ts shared futures walk + trade resolution + presets (safe/filtered)
   marketStructure.ts swings (fractals), BOS / CHoCH
   liquidity.ts       liquidity pools (equal highs/lows) + sweeps (stop hunts)
   orderBlocks.ts     order-block detection
@@ -229,7 +248,9 @@ scripts/
   stock-analyze.ts     CLI analyzer (shares)
   futures-analyze.ts   CLI analyzer (futures contracts)
   stock-backtest.ts    backtest harness (1m walk, 15m bias)
-  futures-backtest.ts  futures backtest — baseline vs. discipline-filtered, R + $
+  futures-backtest.ts  futures backtest — baseline vs. filtered vs. safe, R + $
+  futures-sweep.ts     in-sample preset ladder to tune win rate
+  build-futures-hud.ts HUD: trades drawn on the real 1m charts → futures-hud.html
   build-futures-fixtures.ts  cash-index minute JSON → engine fixtures (SPX/NDX)
   build-overlay.ts     HTML overlay dashboard generator
   build-fixtures.ts    raw 1m broker JSON → engine fixtures (1m + rolled 15m)

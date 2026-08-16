@@ -38,6 +38,8 @@ export interface EngineConfig {
   tp2R: number; // TP2 defaults here when no farther liquidity pool exists
   equalTolerancePct: number;
   session: SessionConfig; // intraday time-of-day filter (1m setups only fire in-session)
+  requireBiasAligned: boolean; // with-trend only: drop counter-trend / fresh-CHoCH-only entries
+  requireZoneConfluence: boolean; // only enter when reacting from an order block or unfilled FVG
 }
 
 export function defaultEngineConfig(): EngineConfig {
@@ -56,6 +58,8 @@ export function defaultEngineConfig(): EngineConfig {
     tp2R: 3.0,
     equalTolerancePct: 0.0010, // 0.10%: equal-high/low tolerance, tighter for intraday levels
     session: defaultSessionConfig(), // NY morning kill-zone by default
+    requireBiasAligned: false, // permissive by default; the conservative preset turns these on
+    requireZoneConfluence: false,
   };
 }
 
@@ -263,8 +267,12 @@ export function analyze(symbol: string, entryBars: Bar[], biasBars: Bar[], cfgIn
 
   let action: Action = "WAIT";
   const rrOk = riskReward !== null && riskReward >= cfg.minRiskReward;
-  const biasOk = biasAligned || htfFreshChoch;
-  const gatesOk = score >= cfg.minConfidence && rrOk && validEntry && biasOk && sessionOk;
+  // With-trend only (requireBiasAligned) drops fresh-CHoCH reversals — safer,
+  // higher win rate, fewer trades. Zone confluence demands an order block or
+  // unfilled FVG behind the entry, not a bare sweep.
+  const biasOk = cfg.requireBiasAligned ? biasAligned : biasAligned || htfFreshChoch;
+  const zoneOk = !cfg.requireZoneConfluence || Boolean(obUsable) || Boolean(fvg);
+  const gatesOk = score >= cfg.minConfidence && rrOk && validEntry && biasOk && zoneOk && sessionOk;
   if (gatesOk) action = isLong ? "BUY" : "SELL";
 
   return {
