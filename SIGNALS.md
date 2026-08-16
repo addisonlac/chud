@@ -84,6 +84,12 @@ npm run signal:fixtures
 
 # TradingView → bot webhook bridge
 npm run webhook                        # listens on :8787/tradingview
+
+# --- Futures mode (ES/MES on SPX, NQ/MNQ on NDX) ---
+npm run futures -- MES                 # analyze now, sized in CONTRACTS
+npm run futures -- MNQ --risk 500
+npm run futures:fixtures               # build index fixtures from data/raw-index/
+npm run futures:backtest               # baseline vs. discipline-filtered, R + $
 ```
 
 Example CLI output:
@@ -103,6 +109,29 @@ Reasoning:
 ```
 
 ---
+
+## Futures mode (ES/MES, NQ/MNQ)
+
+The same engine trades index futures. Index futures track their cash index
+point-for-point, so the engine reasons over the **cash index** as the price
+series — **SPX** for ES/MES, **NDX** for NQ/MNQ — and sizes in whole
+**contracts** to a fixed dollar risk (`contracts = risk$ ÷ (stopPoints ×
+pointValue)`). The contract registry (`src/signals/instruments.ts`) carries the
+point value and tick for each: MES $5/pt, ES $50/pt, MNQ $2/pt, NQ $20/pt.
+
+**Discipline layer (`src/signals/sessionGuard.ts`).** A 1-minute model's biggest
+leak is *overtrading* — re-firing the same idea into a session that's grinding
+against it. The `SessionGuard` enforces prop-desk discipline on top of the raw
+signals: a **confidence floor**, a **per-session trade cap**, a **cooldown after
+a loss**, and a **two-loss-in-a-row daily lockout**. `npm run futures:backtest`
+runs *baseline* (raw signals) and *filtered* (guard on) side by side so you can
+see the trade-off: the guard raises win rate and profit factor and cuts trade
+count hard — it's insurance for chop, and it gives some upside back in a strongly
+trending week.
+
+**Data.** Futures fixtures are built from real cash-index minute bars
+(`npm run futures:fixtures`, reading `data/raw-index/`). At runtime `npm run
+futures -- MES` uses the same default provider (fixture, else keyless feed).
 
 ## The visual overlay
 
@@ -186,17 +215,22 @@ src/signals/
   indicators.ts      EMA / RSI / ATR (pure)
   candles.ts         normalize + 1m→15m session-aware roll-up
   session.ts         intraday session / kill-zone filter (time-of-day gate)
+  sessionGuard.ts    discipline layer (confidence floor, trade cap, cooldown, lockout)
+  instruments.ts     futures contract registry (ES/MES/NQ/MNQ point values + ticks)
   marketStructure.ts swings (fractals), BOS / CHoCH
   liquidity.ts       liquidity pools (equal highs/lows) + sweeps (stop hunts)
   orderBlocks.ts     order-block detection
   fvg.ts             fair value gaps (imbalances)
-  sizing.ts          risk-first share position sizing
+  sizing.ts          risk-first sizing (shares + futures contracts)
   engine.ts          the decision engine (combines all of the above)
   format.ts          human-readable rendering
 src/data/stockData.ts   pluggable data providers (Yahoo 1m/15m / fixtures)
 scripts/
-  stock-analyze.ts     CLI analyzer
+  stock-analyze.ts     CLI analyzer (shares)
+  futures-analyze.ts   CLI analyzer (futures contracts)
   stock-backtest.ts    backtest harness (1m walk, 15m bias)
+  futures-backtest.ts  futures backtest — baseline vs. discipline-filtered, R + $
+  build-futures-fixtures.ts  cash-index minute JSON → engine fixtures (SPX/NDX)
   build-overlay.ts     HTML overlay dashboard generator
   build-fixtures.ts    raw 1m broker JSON → engine fixtures (1m + rolled 15m)
   gen-demo-fixtures.ts deterministic SYNTHETIC intraday fixture generator

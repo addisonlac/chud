@@ -10,6 +10,9 @@ import { aggregateBars } from "../src/signals/candles.js";
 import { analyze } from "../src/signals/engine.js";
 import { sizeShares } from "../src/signals/sizing.js";
 import { inSession, defaultSessionConfig } from "../src/signals/session.js";
+import { sizeContracts } from "../src/signals/sizing.js";
+import { getContract } from "../src/signals/instruments.js";
+import { SessionGuard, defaultGuardConfig } from "../src/signals/sessionGuard.js";
 import type { Bar, Signal } from "../src/signals/types.js";
 
 /** Build bars from compact [high, low, close?] rows at 1m spacing. */
@@ -157,6 +160,62 @@ describe("share sizing", () => {
   it("returns zero shares for a WAIT signal", () => {
     const wait = { action: "WAIT", entry: null, stop: null, targets: [] } as unknown as Signal;
     expect(sizeShares(wait, 250).shares).toBe(0);
+  });
+});
+
+describe("futures contract sizing", () => {
+  const mes = getContract("MES")!;
+  const longSig = { action: "BUY", entry: 5000, stop: 4995, targets: [5010, 5020] } as unknown as Signal;
+
+  it("sizes whole contracts to the dollar risk via point value", () => {
+    const s = sizeContracts(longSig, mes, 250); // 5 pt stop × $5 = $25/contract → 10 contracts
+    expect(s.contracts).toBe(10);
+    expect(s.stopPoints).toBe(5);
+    expect(s.riskPerContract).toBe(25);
+    expect(s.riskUsd).toBe(250);
+    expect(s.notionalUsd).toBe(250000); // 10 × 5000 × $5
+    expect(s.targetPnlUsd[0]).toBe(500); // 10 × (5010-5000) × $5
+  });
+
+  it("micros vs minis: an ES trades 1/10th the contracts of MES for the same risk", () => {
+    const es = getContract("ES")!;
+    expect(sizeContracts(longSig, es, 250).contracts).toBe(1); // 5 pt × $50 = $250/contract → 1
+  });
+
+  it("returns zero contracts for a WAIT signal", () => {
+    const wait = { action: "WAIT", entry: null, stop: null, targets: [] } as unknown as Signal;
+    expect(sizeContracts(wait, mes, 250).contracts).toBe(0);
+  });
+});
+
+describe("session guard (discipline layer)", () => {
+  const t = (h: number, m: number) => Math.floor(Date.UTC(2026, 7, 13, h, m) / 1000); // Thu, ET = UTC-4
+
+  it("blocks signals below the confidence floor", () => {
+    const g = new SessionGuard(defaultGuardConfig()); // floor 0.7
+    expect(g.canEnter(t(14, 0), 100, 0.6).ok).toBe(false);
+    expect(g.canEnter(t(14, 0), 100, 0.9).ok).toBe(true);
+  });
+
+  it("cools down for N bars after a loss", () => {
+    const g = new SessionGuard(defaultGuardConfig()); // cooldown 15
+    g.record(t(14, 0), 100, -1);
+    expect(g.canEnter(t(14, 5), 105, 0.9).ok).toBe(false); // 5 bars later — still cooling
+    expect(g.canEnter(t(14, 20), 120, 0.9).ok).toBe(true); // 20 bars later — clear
+  });
+
+  it("locks out for the session after two losses in a row", () => {
+    const g = new SessionGuard(defaultGuardConfig());
+    g.record(t(14, 0), 100, -1);
+    g.record(t(14, 30), 130, -1); // 2nd consecutive loss → lockout
+    expect(g.canEnter(t(15, 0), 160, 1.0).ok).toBe(false);
+  });
+
+  it("caps trades per session and resets the next day", () => {
+    const g = new SessionGuard(defaultGuardConfig()); // cap 3
+    for (let k = 0; k < 3; k++) g.record(t(14, k), 100 + k, +1); // 3 wins, no lockout
+    expect(g.canEnter(t(15, 0), 200, 1.0).ok).toBe(false); // cap reached
+    expect(g.canEnter(Math.floor(Date.UTC(2026, 7, 14, 14, 0) / 1000), 1000, 1.0).ok).toBe(true); // next day resets
   });
 });
 

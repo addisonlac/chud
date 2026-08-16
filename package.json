@@ -21,6 +21,9 @@
     "signal:backtest": "tsx scripts/stock-backtest.ts",
     "signal:fixtures": "tsx scripts/build-fixtures.ts",
     "signal:demo-fixtures": "tsx scripts/gen-demo-fixtures.ts",
+    "futures": "tsx scripts/futures-analyze.ts",
+    "futures:fixtures": "tsx scripts/build-futures-fixtures.ts",
+    "futures:backtest": "tsx scripts/futures-backtest.ts",
     "signal:overlay": "tsx scripts/build-overlay.ts",
     "webhook": "tsx scripts/tv-webhook.ts"
   },
