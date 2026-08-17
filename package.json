@@ -25,6 +25,7 @@
     "futures:fixtures": "tsx scripts/build-futures-fixtures.ts",
     "futures:backtest": "tsx scripts/futures-backtest.ts",
     "futures:sweep": "tsx scripts/futures-sweep.ts",
+    "futures:validate": "tsx scripts/futures-validate.ts",
     "futures:hud": "tsx scripts/build-futures-hud.ts",
     "signal:overlay": "tsx scripts/build-overlay.ts",
     "webhook": "tsx scripts/tv-webhook.ts"

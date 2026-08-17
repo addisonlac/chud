@@ -140,8 +140,14 @@ futures:backtest` runs baseline / filtered / safe side by side.
 
 > On the validation week (Aug 10–14, MES+MNQ, $250 risk): baseline 35.8% win →
 > filtered 47.8% → **safe 71.4%** (14 trades, +5.51R, +$1,240, PF 2.38,
-> +0.39R/trade). These preset values were chosen **in-sample** — a hypothesis to
-> validate on other weeks, not a proven edge.
+> +0.39R/trade). These preset values were chosen **in-sample**.
+>
+> **Out-of-sample check** (`npm run futures:validate`, frozen preset on 4 earlier
+> weeks it never saw): win rate **48.4%** (31 trades), +6.45R, +$1,592, PF 1.40 —
+> weeks ranged 22% → 60% win. **The 71% did NOT hold out-of-sample** — it was
+> largely overfit. The approach stayed net-positive across unseen weeks (PF 1.40
+> on a tiny sample), but win rate is the wrong target: chasing it overfits.
+> Judge this by expectancy / profit factor over many weeks, not one week's win %.
 
 **Visual HUD.** `npm run futures:hud` renders `futures-hud.html` — a self-contained
 page drawing the safe preset's trades on the real 1m SPX/NDX charts (BUY/SELL
@@ -250,6 +256,7 @@ scripts/
   stock-backtest.ts    backtest harness (1m walk, 15m bias)
   futures-backtest.ts  futures backtest — baseline vs. filtered vs. safe, R + $
   futures-sweep.ts     in-sample preset ladder to tune win rate
+  futures-validate.ts  out-of-sample test: frozen preset across unseen weeks
   build-futures-hud.ts HUD: trades drawn on the real 1m charts → futures-hud.html
   build-futures-fixtures.ts  cash-index minute JSON → engine fixtures (SPX/NDX)
   build-overlay.ts     HTML overlay dashboard generator
