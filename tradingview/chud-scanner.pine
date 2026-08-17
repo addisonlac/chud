@@ -1,0 +1,151 @@
+//@version=5
+// =============================================================================
+// CHUD Scanner — a pattern-recognition SIGNAL indicator for futures (MES/MNQ,
+// ES/NQ) on the 1-minute and 15-minute charts. It does NOT place trades. It
+// recognises a set of named, high-probability setups, draws the call on price,
+// and fires an alert so YOU can decide and execute.
+//
+// Setups (ported from the bot's engine, src/signals/patterns.ts):
+//   • Liquidity Sweep   — stop-hunt wick through a prior swing that rejects.
+//   • Equal-Level Raid  — a sweep of equal highs/lows (double top/bottom).
+//   • Sweep + MSS       — a sweep then a market-structure shift (reversal).
+//   • Order Block Retest— price returns to a fresh demand/supply block, reacts.
+//   • FVG Displacement  — a strong displacement candle's imbalance gets refilled.
+//
+// Calls are (optionally) filtered to the higher-timeframe bias, so a BUY only
+// prints when the 15m is bullish. Measured hit rates on real data are in
+// SIGNALS.md — no setup is a guaranteed win; use these as prompts, not gospel.
+// =============================================================================
+indicator("CHUD Scanner (futures pattern calls)", overlay=true, max_labels_count=400, max_lines_count=200, max_boxes_count=200)
+
+// ---- Inputs ----------------------------------------------------------------
+gBias = "Bias filter"
+biasTf   = input.timeframe("15", "Bias timeframe", group=gBias)
+biasEma  = input.int(50, "Bias EMA length", group=gBias)
+gateBias = input.bool(true, "Only call WITH the bias", group=gBias)
+
+gStruct = "Recognition"
+swingLen = input.int(2, "Swing strength", minval=1, maxval=5, group=gStruct)
+atrLen   = input.int(14, "ATR length", group=gStruct)
+eqTol    = input.float(0.10, "Equal-level tolerance (%)", group=gStruct) / 100.0
+wickMin  = input.float(0.30, "Min rejection wick (fraction)", group=gStruct)
+mssWin   = input.int(8, "Sweep→MSS window (bars)", group=gStruct)
+retestWin= input.int(20, "OB/FVG retest window (bars)", group=gStruct)
+dispAtr  = input.float(1.5, "Displacement (ATR multiple)", group=gStruct)
+
+gShow = "Show / alert patterns"
+pSweep = input.bool(true, "Liquidity Sweep", group=gShow)
+pRaid  = input.bool(true, "Equal-Level Raid", group=gShow)
+pMss   = input.bool(true, "Sweep + MSS", group=gShow)
+pOB    = input.bool(true, "Order Block Retest", group=gShow)
+pFvg   = input.bool(true, "FVG Displacement", group=gShow)
+
+// ---- 15m bias --------------------------------------------------------------
+htfClose = request.security(syminfo.tickerid, biasTf, close, lookahead=barmerge.lookahead_off)
+htfEma   = request.security(syminfo.tickerid, biasTf, ta.ema(close, biasEma), lookahead=barmerge.lookahead_off)
+bull = htfClose > htfEma
+bear = htfClose < htfEma
+okLong  = not gateBias or bull
+okShort = not gateBias or bear
+
+atr = ta.atr(atrLen)
+rng = math.max(high - low, syminfo.mintick)
+
+// ---- Swings (confirmed swingLen back) + equal-level memory -----------------
+ph = ta.pivothigh(swingLen, swingLen)
+pl = ta.pivotlow(swingLen, swingLen)
+var float lastPH = na, var float prevPH = na
+var float lastPL = na, var float prevPL = na
+if not na(ph)
+    prevPH := lastPH
+    lastPH := ph
+if not na(pl)
+    prevPL := lastPL
+    lastPL := pl
+
+// ---- Structure: BOS / CHoCH ------------------------------------------------
+var float refHigh = na, var float refLow = na, var int trendDir = 0
+if not na(ph)
+    refHigh := ph
+if not na(pl)
+    refLow := pl
+bosUp = not na(refHigh) and close > refHigh
+bosDn = not na(refLow) and close < refLow
+if bosUp
+    trendDir := 1
+    refHigh := na
+if bosDn
+    trendDir := -1
+    refLow := na
+
+// ---- Liquidity sweeps + Equal-Level Raid -----------------------------------
+sellSweep = not na(lastPL) and low  < lastPL and close > lastPL and (math.min(open, close) - low) / rng > wickMin // bullish
+buySweep  = not na(lastPH) and high > lastPH and close < lastPH and (high - math.max(open, close)) / rng > wickMin // bearish
+raidLong  = sellSweep and not na(prevPL) and math.abs(lastPL - prevPL) <= lastPL * eqTol
+raidShort = buySweep  and not na(prevPH) and math.abs(lastPH - prevPH) <= lastPH * eqTol
+
+// ---- Sweep + MSS -----------------------------------------------------------
+var int sinceSell = 100000, var int sinceBuy = 100000
+sinceSell := sellSweep ? 0 : sinceSell + 1
+sinceBuy  := buySweep  ? 0 : sinceBuy + 1
+mssLong  = bosUp and sinceSell <= mssWin
+mssShort = bosDn and sinceBuy  <= mssWin
+
+// ---- Order block memory + retest ------------------------------------------
+var float obTop = na, var float obBot = na, var int obDir = 0, var int obBar = 0
+findOB(dir) =>
+    t = na, b = na
+    for i = 1 to 15
+        down = close[i] < open[i]
+        up   = close[i] > open[i]
+        if dir == 1 and down and na(t)
+            t := high[i], b := low[i]
+        if dir == -1 and up and na(t)
+            t := high[i], b := low[i]
+    [t, b]
+if bosUp
+    [t, b] = findOB(1)
+    obTop := t, obBot := b, obDir := 1, obBar := bar_index
+if bosDn
+    [t, b] = findOB(-1)
+    obTop := t, obBot := b, obDir := -1, obBar := bar_index
+obFresh = not na(obTop) and (bar_index - obBar) <= retestWin
+obRetestLong  = obFresh and obDir == 1  and low  <= obTop and low  >= obBot - atr*0.25 and close > obTop
+obRetestShort = obFresh and obDir == -1 and high >= obBot and high <= obTop + atr*0.25 and close < obBot
+
+// ---- FVG displacement ------------------------------------------------------
+bullFvg = low > high[2]
+bearFvg = high < low[2]
+dispNow = math.abs(close[1] - open[1]) >= dispAtr * atr    // the middle (displacement) candle
+var float fvgBTop = na, var float fvgBBot = na, var int fvgBBar = 0
+var float fvgSTop = na, var float fvgSBot = na, var int fvgSBar = 0
+if bullFvg and dispNow
+    fvgBTop := low, fvgBBot := high[2], fvgBBar := bar_index
+if bearFvg and dispNow
+    fvgSTop := low[2], fvgSBot := high, fvgSBar := bar_index
+fvgLong  = not na(fvgBBot) and (bar_index - fvgBBar) <= retestWin and low <= fvgBTop and high >= fvgBBot and close > fvgBTop
+fvgShort = not na(fvgSTop) and (bar_index - fvgSBar) <= retestWin and high >= fvgSBot and low <= fvgSTop and close < fvgSBot
+
+// ---- Compose calls ---------------------------------------------------------
+longCall  = (pSweep and sellSweep) or (pRaid and raidLong) or (pMss and mssLong) or (pOB and obRetestLong) or (pFvg and fvgLong)
+shortCall = (pSweep and buySweep)  or (pRaid and raidShort) or (pMss and mssShort) or (pOB and obRetestShort) or (pFvg and fvgShort)
+buy  = longCall  and okLong
+sell = shortCall and okShort
+
+nameLong  = mssLong ? "Sweep+MSS" : raidLong ? "Equal-Level Raid" : fvgLong ? "FVG Displacement" : obRetestLong ? "OB Retest" : "Liquidity Sweep"
+nameShort = mssShort ? "Sweep+MSS" : raidShort ? "Equal-Level Raid" : fvgShort ? "FVG Displacement" : obRetestShort ? "OB Retest" : "Liquidity Sweep"
+
+// ---- Draw + alert ----------------------------------------------------------
+if buy
+    label.new(bar_index, low, "▲ BUY\n" + nameLong, style=label.style_label_up, color=color.new(color.teal, 10), textcolor=color.white, size=size.small)
+if sell
+    label.new(bar_index, high, "▼ SELL\n" + nameShort, style=label.style_label_down, color=color.new(color.red, 10), textcolor=color.white, size=size.small)
+barcolor(buy ? color.new(color.teal, 40) : sell ? color.new(color.red, 40) : na)
+
+if buy
+    alert("CHUD: BUY " + syminfo.ticker + " — " + nameLong + " (15m " + (bull ? "bull" : bear ? "bear" : "flat") + ") @ " + str.tostring(close, "#.##"), alert.freq_once_per_bar_close)
+if sell
+    alert("CHUD: SELL " + syminfo.ticker + " — " + nameShort + " (15m " + (bull ? "bull" : bear ? "bear" : "flat") + ") @ " + str.tostring(close, "#.##"), alert.freq_once_per_bar_close)
+
+alertcondition(buy,  title="CHUD BUY call",  message="CHUD BUY {{ticker}} — pattern call @ {{close}}")
+alertcondition(sell, title="CHUD SELL call", message="CHUD SELL {{ticker}} — pattern call @ {{close}}")

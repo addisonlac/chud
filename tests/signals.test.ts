@@ -13,6 +13,7 @@ import { inSession, defaultSessionConfig } from "../src/signals/session.js";
 import { sizeContracts } from "../src/signals/sizing.js";
 import { getContract } from "../src/signals/instruments.js";
 import { SessionGuard, defaultGuardConfig } from "../src/signals/sessionGuard.js";
+import { detectPatterns, latestPattern } from "../src/signals/patterns.js";
 import type { Bar, Signal } from "../src/signals/types.js";
 
 /** Build bars from compact [high, low, close?] rows at 1m spacing. */
@@ -185,6 +186,47 @@ describe("futures contract sizing", () => {
   it("returns zero contracts for a WAIT signal", () => {
     const wait = { action: "WAIT", entry: null, stop: null, targets: [] } as unknown as Signal;
     expect(sizeContracts(wait, mes, 250).contracts).toBe(0);
+  });
+});
+
+describe("pattern recognition", () => {
+  // swing high 15 @2, swing low 8 @6, sell-side sweep @9, bullish break @11
+  const b = bars([
+    [11, 10, 10.5],
+    [12, 11, 11.5],
+    [15, 13, 14], // swing high
+    [13, 11, 11.5],
+    [12, 10, 10.5],
+    [12, 10, 11],
+    [10, 8, 8.2], // swing low
+    [11, 9, 10.5],
+    [12, 10, 11], // confirms swing low
+    [11, 7, 10.8], // sell-side sweep → long
+    [13, 11, 12.5],
+    [16, 14, 15.5], // close > swing high 15 → bullish MSS
+  ]);
+
+  it("recognises a pure liquidity sweep as a long", () => {
+    const hits = detectPatterns(b);
+    const sweep = hits.find((h) => h.name === "Liquidity Sweep" && h.index === 9);
+    expect(sweep).toBeTruthy();
+    expect(sweep!.direction).toBe("long");
+    expect(sweep!.stop).toBeLessThan(sweep!.entry); // stop below entry for a long
+  });
+
+  it("recognises the sweep + market-structure-shift reversal", () => {
+    const hits = detectPatterns(b);
+    const mss = hits.find((h) => h.name === "Sweep + MSS");
+    expect(mss).toBeTruthy();
+    expect(mss!.direction).toBe("long");
+    expect(mss!.confidence).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("latestPattern returns the freshest actionable call or null", () => {
+    const p = latestPattern(b, 3);
+    expect(p === null || ["long", "short"].includes(p.direction)).toBe(true);
+    const quiet = latestPattern(bars(Array.from({ length: 12 }, (_, i) => [100 + i * 0.1, 99 + i * 0.1] as [number, number])), 3);
+    expect(quiet).toBeNull(); // a smooth drift has no sweep/OB/FVG call
   });
 });
 

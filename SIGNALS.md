@@ -86,11 +86,15 @@ npm run signal:fixtures
 npm run webhook                        # listens on :8787/tradingview
 
 # --- Futures mode (ES/MES on SPX, NQ/MNQ on NDX) ---
+npm run futures:scan                   # freshest PATTERN CALL per contract (you trade it)
+npm run futures:patterns               # measured hit rate per named pattern (real data)
 npm run futures -- MES                 # analyze now, sized in CONTRACTS
 npm run futures -- MNQ --risk 500
 npm run futures:fixtures               # build index fixtures from data/raw-index/
 npm run futures:backtest               # baseline vs. filtered vs. safe, R + $
 npm run futures:sweep                  # tune: win rate across a preset ladder
+npm run futures:validate               # frozen preset on unseen weeks (out-of-sample)
+npm run futures:walkforward            # pick on past weeks, trade the next (no peeking)
 npm run futures:hud                    # render futures-hud.html (trades on charts)
 ```
 
@@ -171,6 +175,48 @@ weeks and trades the next — the honest, no-peeking estimate of live performanc
 **Data.** Futures fixtures are built from real cash-index minute bars
 (`npm run futures:fixtures`, reading `data/raw-index/`). At runtime `npm run
 futures -- MES` uses the same default provider (fixture, else keyless feed).
+
+## Pattern recognition — the calls the bot makes (you trade them)
+
+This is a **signal / analysis** bot: it recognises named futures setups on the 1m
+chart and tells you *when* and *why* to buy or sell — **you** place the orders.
+The recogniser (`src/signals/patterns.ts`) detects six setups, each a causal
+detector built on the same SMC primitives:
+
+| Pattern | What it is |
+|---|---|
+| **Liquidity Sweep** | a stop-hunt wick through a prior swing that rejects back |
+| **Equal-Level Raid** | a sweep of *equal highs/lows* (a double top/bottom pool) |
+| **Sweep + MSS** | a sweep immediately followed by a market-structure shift (reversal) |
+| **Order Block Retest** | price returns to a fresh demand/supply block and reacts |
+| **FVG Displacement** | a strong displacement candle's imbalance gets refilled and continues |
+| **Breaker Block** | a failed order block flips and rejects from the far side |
+
+**Which are actually "sure hits"? — measured, not claimed.** `npm run
+futures:patterns` scores every call across the committed weeks, 15m-bias-gated,
+to a 1R-bank / breakeven-runner exit:
+
+| Pattern | Calls | Win% | Profit factor |
+|---|---|---|---|
+| FVG Displacement | 133 | **51.9%** | **1.14** |
+| Equal-Level Raid | 124 | 50.8% | 1.11 |
+| Liquidity Sweep | 1776 | 47.7% | 0.97 |
+| Order Block Retest | 296 | 46.3% | 0.88 |
+| Breaker Block | 192 | 42.2% | 0.69 |
+| Sweep + MSS | 734 | 40.5% | 0.69 |
+| **All calls** | 3255 | **45.9%** | **0.89** |
+
+**The honest takeaway: no single pattern is a guaranteed win**, and the raw call
+stream is net-losing (PF 0.89). Recognition alone is not an edge — the earlier
+71% "safe" week came from the *filters* (session window, bias, one-loss lockout),
+not from the pattern. Use the calls as **prompts for your own judgement**, favour
+the stronger setups (FVG Displacement, Equal-Level Raid), and demand context. The
+numbers are a small sample — widen the weeks before trusting any one of them.
+
+**On the chart.** `tradingview/chud-scanner.pine` is an **indicator** (no orders)
+that labels each of these calls on your 1m/15m chart and fires an alert
+(`CHUD: BUY MNQ — Sweep+MSS (15m bull) @ …`) so you get pinged and decide.
+`npm run futures:scan` is the same recogniser in the terminal.
 
 ## The visual overlay
 
@@ -261,6 +307,7 @@ src/signals/
   liquidity.ts       liquidity pools (equal highs/lows) + sweeps (stop hunts)
   orderBlocks.ts     order-block detection
   fvg.ts             fair value gaps (imbalances)
+  patterns.ts        named pattern recogniser (sweep, raid, MSS, OB retest, FVG, breaker)
   sizing.ts          risk-first sizing (shares + futures contracts)
   engine.ts          the decision engine (combines all of the above)
   format.ts          human-readable rendering
@@ -270,8 +317,11 @@ scripts/
   futures-analyze.ts   CLI analyzer (futures contracts)
   stock-backtest.ts    backtest harness (1m walk, 15m bias)
   futures-backtest.ts  futures backtest — baseline vs. filtered vs. safe, R + $
+  futures-scan.ts      terminal scanner: freshest pattern call per contract
+  futures-patterns.ts  measured hit rate per named pattern on real data
   futures-sweep.ts     in-sample preset ladder to tune win rate
   futures-validate.ts  out-of-sample test: frozen preset across unseen weeks
+  futures-walkforward.ts  pick on past weeks, trade the next (no peeking)
   build-futures-hud.ts HUD: trades drawn on the real 1m charts → futures-hud.html
   build-futures-fixtures.ts  cash-index minute JSON → engine fixtures (SPX/NDX)
   build-overlay.ts     HTML overlay dashboard generator

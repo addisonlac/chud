@@ -1,14 +1,16 @@
 # CHUD — TradingView
 
-Two Pine files here:
+Three Pine files here:
 
-- **`chud-futures.pine`** — a Pine v5 **strategy** that automates index futures
-  (MES/MNQ, ES/NQ) end-to-end from TradingView, firing broker-ready webhook alerts
-  for an execution bridge (TradersPost/PickMyTrade → Tradovate). This is the
-  "add-on" product — it runs on TradingView's servers, so nothing of yours runs
-  24/7. **Setup: [`FUTURES-SETUP.md`](FUTURES-SETUP.md).**
-- **`chud-signals.pine`** — the original overlay **indicator** (below), for
-  drawing/alerting the setups on any chart without placing orders.
+- **`chud-scanner.pine`** — a pattern-recognition **indicator** (no orders) that
+  labels named futures setups (Liquidity Sweep, Equal-Level Raid, Sweep + MSS,
+  Order Block Retest, FVG Displacement) on your 1m/15m chart and **alerts you** so
+  you can decide and trade. This is the signal bot — you place the orders.
+- **`chud-futures.pine`** — an optional Pine v5 **strategy** that *automates* the
+  same idea end-to-end via a webhook execution bridge (TradersPost/PickMyTrade →
+  Tradovate), running on TradingView's servers with no 24/7 server of your own.
+  **Setup: [`FUTURES-SETUP.md`](FUTURES-SETUP.md).**
+- **`chud-signals.pine`** — the original overlay **indicator** (below).
 
 ---
 

@@ -5,16 +5,15 @@ enriches them with market data, news sentiment, and whale activity, scores
 the trade with a free-tier Groq-hosted LLM, and (optionally) auto-executes
 via Jupiter under a fixed set of risk rules.
 
-> 📈 **Also in this repo: [CHUD Signals](SIGNALS.md)** — an AI signal bot for
-> **index futures (ES/MES, NQ/MNQ)** and shares that reads liquidity sweeps +
-> market structure on the **1-minute entry / 15-minute bias** charts, gated to
-> the session's high-liquidity window with a prop-desk **discipline layer**
-> (confidence floor, per-session cap, post-loss cooldown, loss lockout). It sizes
-> in **contracts** (or shares), explains every call step by step, and ships a
-> **TradingView strategy** (`tradingview/chud-futures.pine`) that automates
-> futures via webhook to a broker bridge (TradersPost → Tradovate) with no 24/7
-> server. Start with `npm run futures -- MES`, `npm run futures:backtest`, or
-> `npm run signal -- NVDA`.
+> 📈 **Also in this repo: [CHUD Signals](SIGNALS.md)** — a pattern-recognition
+> **signal bot** for **index futures (ES/MES, NQ/MNQ)** on the **1m + 15m** charts.
+> It recognises named setups (liquidity sweeps, equal-level raids, sweep + MSS,
+> order-block retests, FVG displacement), **tells you when and why to buy/sell**,
+> and shows the measured hit rate of each (`npm run futures:patterns`) so nothing
+> is a hollow claim. A **TradingView scanner** (`tradingview/chud-scanner.pine`)
+> labels + alerts the calls on your chart — you place the trades; an optional Pine
+> **strategy** can automate via a broker webhook bridge. Start with
+> `npm run futures:scan`, `npm run futures:patterns`, or `npm run futures:backtest`.
 
 > **Runs entirely on free-tier services.** Groq (AI scoring/sentiment) and
 > the public Solana RPC (whale tracking) require no payment method. See
