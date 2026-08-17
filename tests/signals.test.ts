@@ -14,6 +14,7 @@ import { sizeContracts } from "../src/signals/sizing.js";
 import { getContract } from "../src/signals/instruments.js";
 import { SessionGuard, defaultGuardConfig } from "../src/signals/sessionGuard.js";
 import { detectPatterns, latestPattern } from "../src/signals/patterns.js";
+import { detectOrbSetups } from "../src/signals/orb.js";
 import type { Bar, Signal } from "../src/signals/types.js";
 
 /** Build bars from compact [high, low, close?] rows at 1m spacing. */
@@ -186,6 +187,33 @@ describe("futures contract sizing", () => {
   it("returns zero contracts for a WAIT signal", () => {
     const wait = { action: "WAIT", entry: null, stop: null, targets: [] } as unknown as Signal;
     expect(sizeContracts(wait, mes, 250).contracts).toBe(0);
+  });
+});
+
+describe("opening range breakout", () => {
+  // first 15 bars range 100–101, then a break above → long, stop at range low
+  const session = bars([
+    ...(Array.from({ length: 15 }, () => [101, 100, 100.5]) as [number, number, number][]),
+    [102, 101, 101.5], // close 101.5 > OR high 101 → long break, above VWAP
+    [103, 101.5, 102.5],
+    [104, 102, 103.5],
+    [105, 103, 104.5], // reaches 2R target (101.5 + 2×1.5 = 104.5)
+    [105, 104, 104.5],
+  ]);
+
+  it("takes the first break of the opening range as a with-VWAP long", () => {
+    const su = detectOrbSetups(session);
+    expect(su.length).toBe(1);
+    expect(su[0]!.direction).toBe("long");
+    expect(su[0]!.orHigh).toBeCloseTo(101, 5);
+    expect(su[0]!.stop).toBeCloseTo(100, 5); // stop = opposite side of the range
+    expect(su[0]!.target).toBeGreaterThan(su[0]!.entry); // asymmetric target
+    expect(su[0]!.target - su[0]!.entry).toBeCloseTo(2 * (su[0]!.entry - su[0]!.stop), 5); // 2R
+  });
+
+  it("stands aside when price never leaves the opening range", () => {
+    const quiet = bars(Array.from({ length: 30 }, () => [101, 100, 100.5]) as [number, number, number][]);
+    expect(detectOrbSetups(quiet).length).toBe(0);
   });
 });
 

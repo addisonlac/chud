@@ -31,7 +31,9 @@
     "futures:hud": "tsx scripts/build-futures-hud.ts",
     "signal:overlay": "tsx scripts/build-overlay.ts",
     "webhook": "tsx scripts/tv-webhook.ts",
-    "futures:scan": "tsx scripts/futures-scan.ts"
+    "futures:scan": "tsx scripts/futures-scan.ts",
+    "orb:backtest": "tsx scripts/orb-backtest.ts",
+    "orb:app": "tsx scripts/build-orb-app.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.4",

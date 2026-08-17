@@ -176,6 +176,27 @@ weeks and trades the next — the honest, no-peeking estimate of live performanc
 (`npm run futures:fixtures`, reading `data/raw-index/`). At runtime `npm run
 futures -- MES` uses the same default provider (fixture, else keyless feed).
 
+## Opening Range Breakout — the chosen strategy (the one that survives costs)
+
+The pattern engine below recognises many setups, but the raw calls are ~breakeven
+after costs. **Opening Range Breakout (ORB)** is the strategy we settled on because
+it clears the bar honestly: high enough hit rate, **average win > average loss**,
+and — critically — it survives commissions + slippage, because a range-width stop
+means small size (costs are a few % of risk, not 36% like a tight-stop scalp).
+
+- `src/signals/orb.ts` — first break of the first-15-minute range, in the VWAP
+  direction; stop = the far side of the range; target = 2R; one trade per session.
+- `npm run orb:backtest` — **after-cost** backtest (commission + slippage).
+- `npm run orb:app` — builds `orb-app.html`, an interactive terminal that draws the
+  ORB call on each real ES/NQ session with after-cost stats.
+
+> On **21 real sessions/symbol** (Jul 17 – Aug 14; the Jul 13–16 pull came back
+> interpolated and is correctly excluded), MES + MNQ, $250 risk, 15m range / 2R,
+> **after costs**: 42 trades, **52.4% win, avg win +1.26R vs avg loss −0.75R,
+> profit factor 2.06, net +$4,087.** The 30-minute range lost money — 15m is the
+> config. Small sample; widen before trusting, but this is the first result that
+> is net-positive *after* costs with wins bigger than losses.
+
 ## Pattern recognition — the calls the bot makes (you trade them)
 
 This is a **signal / analysis** bot: it recognises named futures setups on the 1m
