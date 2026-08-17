@@ -11,8 +11,10 @@ via Jupiter under a fixed set of risk rules.
 > the session's high-liquidity window with a prop-desk **discipline layer**
 > (confidence floor, per-session cap, post-loss cooldown, loss lockout). It sizes
 > in **contracts** (or shares), explains every call step by step, and ships a
-> **TradingView** overlay + webhook. Start with `npm run futures -- MES`,
-> `npm run futures:backtest`, or `npm run signal -- NVDA`.
+> **TradingView strategy** (`tradingview/chud-futures.pine`) that automates
+> futures via webhook to a broker bridge (TradersPost → Tradovate) with no 24/7
+> server. Start with `npm run futures -- MES`, `npm run futures:backtest`, or
+> `npm run signal -- NVDA`.
 
 > **Runs entirely on free-tier services.** Groq (AI scoring/sentiment) and
 > the public Solana RPC (whale tracking) require no payment method. See

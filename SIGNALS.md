@@ -153,6 +153,15 @@ futures:backtest` runs baseline / filtered / safe side by side.
 page drawing the safe preset's trades on the real 1m SPX/NDX charts (BUY/SELL
 markers coloured by win/loss, entry/stop/target on price, per-day + week stats).
 
+**Live automation (TradingView add-on).** `tradingview/chud-futures.pine` is a Pine
+**strategy** that runs the safe preset on TradingView's servers and fires
+broker-ready webhook alerts to a futures execution bridge (TradersPost /
+PickMyTrade → Tradovate / NinjaTrader) — so it trades futures without any 24/7
+server of your own. Full setup in [`tradingview/FUTURES-SETUP.md`](tradingview/FUTURES-SETUP.md).
+
+**Walk-forward.** `npm run futures:walkforward` picks the preset using only past
+weeks and trades the next — the honest, no-peeking estimate of live performance.
+
 **Data.** Futures fixtures are built from real cash-index minute bars
 (`npm run futures:fixtures`, reading `data/raw-index/`). At runtime `npm run
 futures -- MES` uses the same default provider (fixture, else keyless feed).

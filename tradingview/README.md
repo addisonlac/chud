@@ -1,4 +1,18 @@
-# CHUD Signals — TradingView overlay
+# CHUD — TradingView
+
+Two Pine files here:
+
+- **`chud-futures.pine`** — a Pine v5 **strategy** that automates index futures
+  (MES/MNQ, ES/NQ) end-to-end from TradingView, firing broker-ready webhook alerts
+  for an execution bridge (TradersPost/PickMyTrade → Tradovate). This is the
+  "add-on" product — it runs on TradingView's servers, so nothing of yours runs
+  24/7. **Setup: [`FUTURES-SETUP.md`](FUTURES-SETUP.md).**
+- **`chud-signals.pine`** — the original overlay **indicator** (below), for
+  drawing/alerting the setups on any chart without placing orders.
+
+---
+
+## CHUD Signals — TradingView overlay
 
 `chud-signals.pine` is a Pine v5 **overlay indicator** that ports the bot's engine
 (`src/signals`) onto a TradingView chart. It draws, right on price:

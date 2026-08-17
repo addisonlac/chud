@@ -1,0 +1,158 @@
+//@version=5
+// =============================================================================
+// CHUD Futures — 1m entry / 15m bias "safe" preset, as a self-contained
+// TradingView STRATEGY that automates index-futures (MES/MNQ, ES/NQ).
+//
+// This is the "add-on" build: all logic runs on TradingView's servers, so there
+// is NO bot to keep running 24/7. On each entry/exit the strategy fires an alert
+// whose message is a broker-ready JSON payload for a webhook execution bridge
+// (TradersPost → Tradovate / NinjaTrader, or PickMyTrade). See FUTURES-SETUP.md.
+//
+// It ports the bot's "safe" preset: with-trend only, react from an order block /
+// FVG, a confidence stack (bias + trigger + zone + RSI + EMA), the NY opening
+// drive only, risk-first contract sizing, one-loss-per-session lockout, and a
+// bank-at-1R target. The TypeScript engine (npm run futures:backtest) remains
+// the research source of truth; this mirrors its logic for live execution.
+// =============================================================================
+strategy("CHUD Futures (1m/15m safe)", overlay=true, pyramiding=0,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     initial_capital=25000, process_orders_on_close=true,
+     calc_on_every_tick=false, max_labels_count=200, max_lines_count=200, max_boxes_count=200)
+
+// ---- Inputs ----------------------------------------------------------------
+gExec   = "Execution / webhook"
+webSym  = input.string("MES1!", "Broker symbol (webhook ticker)", group=gExec, tooltip="The contract your bridge trades, e.g. MES1! or an explicit month like MESU2026. Sent as \"ticker\" in the JSON.")
+riskUsd = input.float(250, "Risk $ per trade", minval=10, group=gExec)
+ptValue = input.float(5, "$ per index point (MES 5, ES 50, MNQ 2, NQ 20)", minval=0.1, group=gExec)
+
+gBias   = "Bias (higher timeframe)"
+biasTf  = input.timeframe("15", "Bias timeframe", group=gBias)
+biasEma = input.int(50, "Bias EMA length", group=gBias)
+
+gEntry  = "Entry"
+swingLen = input.int(2, "Swing strength", minval=1, maxval=5, group=gEntry)
+atrLen   = input.int(14, "ATR length", group=gEntry)
+stopBuf  = input.float(0.25, "Stop buffer (ATR)", group=gEntry)
+tpR      = input.float(1.0, "Take-profit (R multiple)", minval=0.5, group=gEntry)
+rsiLen   = input.int(14, "RSI length", group=gEntry)
+reqZone  = input.bool(true, "Require order-block / FVG confluence", group=gEntry)
+fvgLook  = input.int(12, "Zone lookback (bars)", group=gEntry)
+
+gSess   = "Session & discipline"
+sessWin = input.session("0930-1030", "Trading window", group=gSess)
+sessTz  = input.string("America/New_York", "Timezone", group=gSess)
+maxTr   = input.int(2, "Max trades per session", minval=1, group=gSess)
+oneLoss = input.bool(true, "Stop for the day after a loss", group=gSess)
+
+// ---- 15m bias --------------------------------------------------------------
+htfClose = request.security(syminfo.tickerid, biasTf, close, lookahead=barmerge.lookahead_off)
+htfEma   = request.security(syminfo.tickerid, biasTf, ta.ema(close, biasEma), lookahead=barmerge.lookahead_off)
+bull = htfClose > htfEma
+bear = htfClose < htfEma
+
+// ---- Session --------------------------------------------------------------
+inSess = not na(time(timeframe.period, sessWin, sessTz))
+bgcolor(inSess ? na : color.new(color.gray, 94), title="Out of session")
+
+// ---- Swings + structure (BOS / CHoCH) --------------------------------------
+ph = ta.pivothigh(swingLen, swingLen)
+pl = ta.pivotlow(swingLen, swingLen)
+var float lastPH = na
+var float lastPL = na
+var float refHigh = na
+var float refLow  = na
+var int trendDir = 0
+if not na(ph)
+    lastPH := ph
+    refHigh := ph
+if not na(pl)
+    lastPL := pl
+    refLow := pl
+bosUp = not na(refHigh) and close > refHigh
+bosDn = not na(refLow) and close < refLow
+if bosUp
+    trendDir := 1
+    refHigh := na
+if bosDn
+    trendDir := -1
+    refLow := na
+
+// ---- Liquidity sweeps ------------------------------------------------------
+rng = math.max(high - low, syminfo.mintick)
+sellSweep = not na(lastPL) and low  < lastPL and close > lastPL and (math.min(open, close) - low) / rng > 0.3  // bullish
+buySweep  = not na(lastPH) and high > lastPH and close < lastPH and (high - math.max(open, close)) / rng > 0.3 // bearish
+
+// ---- Fair value gaps (zone confluence) -------------------------------------
+bullFvg = low > high[2]
+bearFvg = high < low[2]
+var int barsSinceBullFvg = 1000000
+var int barsSinceBearFvg = 1000000
+barsSinceBullFvg := bullFvg ? 0 : barsSinceBullFvg + 1
+barsSinceBearFvg := bearFvg ? 0 : barsSinceBearFvg + 1
+zoneLong  = bosUp or barsSinceBullFvg <= fvgLook   // order-block origin (BOS) or a fresh bullish imbalance
+zoneShort = bosDn or barsSinceBearFvg <= fvgLook
+
+// ---- Momentum confluence (stands in for the confidence floor) --------------
+rsi = ta.rsi(close, rsiLen)
+ema1m = ta.ema(close, biasEma)
+rsiLong  = rsi > 45 and rsi < 72
+rsiShort = rsi < 55 and rsi > 28
+emaLong  = close >= ema1m
+emaShort = close <= ema1m
+
+// ---- Signal ----------------------------------------------------------------
+rawLong  = sellSweep or bosUp
+rawShort = buySweep  or bosDn
+longSig  = bull and rawLong  and (not reqZone or zoneLong)  and rsiLong  and emaLong  and inSess
+shortSig = bear and rawShort and (not reqZone or zoneShort) and rsiShort and emaShort and inSess
+
+// ---- Session discipline (guard) --------------------------------------------
+var int tradesToday = 0
+var bool locked = false
+newDay = ta.change(time("D")) != 0
+if newDay
+    tradesToday := 0
+    locked := false
+// a just-closed trade that lost ends the day
+newClosed = ta.change(strategy.closedtrades) > 0
+if oneLoss and newClosed and strategy.closedtrades.profit(strategy.closedtrades - 1) < 0
+    locked := true
+
+canEnter = inSess and not locked and tradesToday < maxTr and strategy.position_size == 0
+
+// ---- Risk model + orders ---------------------------------------------------
+atr = ta.atr(atrLen)
+qtyFor(riskPts) => math.max(1, math.floor(riskUsd / (math.max(riskPts, syminfo.mintick) * ptValue)))
+
+tpJson(act, q, px, sl, tp) =>
+    '{"ticker":"' + webSym + '","action":"' + act + '","quantity":' + str.tostring(q) +
+      ',"price":' + str.tostring(px, "#.##") +
+      ',"stopLoss":{"type":"stop","stopPrice":' + str.tostring(sl, "#.##") + '}' +
+      ',"takeProfit":{"limitPrice":' + str.tostring(tp, "#.##") + '}}'
+exitJson() => '{"ticker":"' + webSym + '","action":"exit"}'
+
+if canEnter and longSig
+    swept = sellSweep ? low : nz(refLow, low)
+    stopPx = math.min(low, swept) - atr * stopBuf
+    riskPts = close - stopPx
+    if riskPts > 0
+        q = qtyFor(riskPts)
+        tpPx = close + tpR * riskPts
+        strategy.entry("L", strategy.long, qty=q, alert_message=tpJson("buy", q, close, stopPx, tpPx))
+        strategy.exit("L-x", "L", stop=stopPx, limit=tpPx, alert_message=exitJson())
+        tradesToday += 1
+
+if canEnter and shortSig
+    swept = buySweep ? high : nz(refHigh, high)
+    stopPx = math.max(high, swept) + atr * stopBuf
+    riskPts = stopPx - close
+    if riskPts > 0
+        q = qtyFor(riskPts)
+        tpPx = close - tpR * riskPts
+        strategy.entry("S", strategy.short, qty=q, alert_message=tpJson("sell", q, close, stopPx, tpPx))
+        strategy.exit("S-x", "S", stop=stopPx, limit=tpPx, alert_message=exitJson())
+        tradesToday += 1
+
+// ---- Chart markers ---------------------------------------------------------
+plotshape(canEnter and longSig,  title="BUY",  style=shape.triangleup,   location=location.belowbar, color=color.teal, size=size.small, text="BUY")
+plotshape(canEnter and shortSig, title="SELL", style=shape.triangledown, location=location.abovebar, color=color.red,  size=size.small, text="SELL")
