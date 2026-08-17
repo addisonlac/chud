@@ -161,6 +161,12 @@ server of your own. Full setup in [`tradingview/FUTURES-SETUP.md`](tradingview/F
 
 **Walk-forward.** `npm run futures:walkforward` picks the preset using only past
 weeks and trades the next — the honest, no-peeking estimate of live performance.
+> Result over 4 forward weeks: **42.2% win, +3.62R, +$931, profit factor 1.10,
+> +0.06R/trade** — barely above breakeven, and one bad week (−$641) nearly erased
+> the gains. Note the adaptive selection did *worse* than just freezing the `safe`
+> preset (PF 1.40 OOS): meta-tuning added noise. The truthful read is a thin,
+> unproven edge — treat it as a disciplined framework to keep testing, not a
+> money printer.
 
 **Data.** Futures fixtures are built from real cash-index minute bars
 (`npm run futures:fixtures`, reading `data/raw-index/`). At runtime `npm run
