@@ -16,7 +16,10 @@
     "test:watch": "vitest",
     "test:scanner": "tsx scripts/test-scanner.ts",
     "backtest": "tsx scripts/backtest.ts",
-    "demo:exits": "tsx scripts/exit-rules-demo.ts"
+    "demo:exits": "tsx scripts/exit-rules-demo.ts",
+    "outreach": "tsx src/outreach/cli.ts",
+    "outreach:daemon": "tsx src/outreach/daemon.ts",
+    "outreach:start": "node dist/outreach/daemon.js"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.4",

@@ -1,0 +1,13 @@
+services:
+  outreach:
+    build:
+      context: .
+      dockerfile: Dockerfile.outreach
+    env_file: .env
+    environment:
+      OUTREACH_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data # leads + state survive restarts/redeploys
+    ports:
+      - "3100:3100"
+    restart: unless-stopped # comes back after crashes and server reboots
