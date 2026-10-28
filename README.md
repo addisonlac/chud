@@ -15,6 +15,9 @@ via Jupiter under a fixed set of risk rules.
 > [Safety defaults](#safety-defaults) section before setting
 > `LIVE_TRADING=true`. Nothing here is financial advice.
 
+> **Also in this repo:** a 24/7 Facebook outreach agent for a website-building
+> service — see [OUTREACH.md](OUTREACH.md).
+
 ## Strategy
 
 1. **Scan** — stream pump.fun tokens graduating to a DEX (`SCANNER_SOURCE=
