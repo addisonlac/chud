@@ -10,11 +10,11 @@ An app that runs 24/7. It finds businesses that need your help, works out exactl
 
 ## Start it
 
-You need [Node.js 20+](https://nodejs.org) (the LTS installer).
+You need [Node.js](https://nodejs.org) 22.13 or newer (just install the current LTS). Nothing else; no build tools are needed.
 
 | | |
 |---|---|
-| **Windows** | Double-click **`Start Outreach Agent.bat`** |
+| **Windows** | Double-click **`Start Outreach Agent.bat`** (if Windows shows "Unknown Publisher", click **Run**; that's normal for downloaded scripts) |
 | **Mac / Linux** | Run `./start.sh` (on a Mac, copy it to `Start Outreach Agent.command` to double-click it) |
 | **Terminal** | `npm install`, then `npm start` |
 

@@ -1,8 +1,79 @@
-import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
-export type DB = Database.Database;
+/**
+ * Uses Node's built-in SQLite (node:sqlite) — no native module to compile,
+ * so `npm install` works on any Windows/Mac/Linux machine without build
+ * tools. This thin wrapper keeps a small, familiar API for the rest of the code.
+ */
+type Param = unknown;
+
+function bind(params: Param[]): SQLInputValue[] {
+  return params.map((p) => {
+    if (p === undefined) return null;
+    if (typeof p === "boolean") return p ? 1 : 0;
+    return p as SQLInputValue;
+  });
+}
+
+export interface Statement {
+  run(...params: Param[]): { changes: number; lastInsertRowid: number | bigint };
+  get(...params: Param[]): unknown;
+  all(...params: Param[]): unknown[];
+}
+
+export class DB {
+  private readonly raw: DatabaseSync;
+  private depth = 0;
+
+  constructor(path: string) {
+    this.raw = new DatabaseSync(path);
+  }
+
+  prepare(sql: string): Statement {
+    const stmt = this.raw.prepare(sql);
+    return {
+      run: (...p) => {
+        const r = stmt.run(...bind(p));
+        return { changes: Number(r.changes), lastInsertRowid: r.lastInsertRowid };
+      },
+      // node:sqlite returns null-prototype rows; spread them into plain objects
+      get: (...p) => {
+        const row = stmt.get(...bind(p));
+        return row ? { ...row } : undefined;
+      },
+      all: (...p) => stmt.all(...bind(p)).map((r) => ({ ...r })),
+    };
+  }
+
+  exec(sql: string): void {
+    this.raw.exec(sql);
+  }
+
+  /** Wraps fn in a transaction (nested calls join the outer one). */
+  transaction<T>(fn: () => T): () => T {
+    return () => {
+      if (this.depth > 0) return fn();
+      this.depth++;
+      this.raw.exec("BEGIN");
+      try {
+        const out = fn();
+        this.raw.exec("COMMIT");
+        return out;
+      } catch (err) {
+        this.raw.exec("ROLLBACK");
+        throw err;
+      } finally {
+        this.depth--;
+      }
+    };
+  }
+
+  close(): void {
+    this.raw.close();
+  }
+}
 
 const MIGRATIONS: string[] = [
   `
@@ -78,17 +149,20 @@ const MIGRATIONS: string[] = [
 
 export function openDb(path: string): DB {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-  const db = new Database(path);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+  const db = new DB(path);
+  if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec("PRAGMA busy_timeout = 5000");
   migrate(db);
   return db;
 }
 
 function migrate(db: DB): void {
-  const version = db.pragma("user_version", { simple: true }) as number;
+  const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
   for (let i = version; i < MIGRATIONS.length; i++) {
-    db.exec(MIGRATIONS[i]!);
-    db.pragma(`user_version = ${i + 1}`);
+    db.transaction(() => {
+      db.exec(MIGRATIONS[i]!);
+      db.exec(`PRAGMA user_version = ${i + 1}`);
+    })();
   }
 }

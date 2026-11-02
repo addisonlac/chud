@@ -5,6 +5,7 @@ module.exports = {
     {
       name: "outreach-agent",
       script: "dist/index.js",
+      node_args: "--disable-warning=ExperimentalWarning",
       env: { NODE_ENV: "production", OPEN_BROWSER: "false" },
       autorestart: true,
       max_restarts: 50,
