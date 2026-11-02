@@ -23,7 +23,10 @@ export function createTransport(s: Settings): Transporter {
     host: s.smtpHost,
     port: s.smtpPort,
     secure: s.smtpSecure,
-    auth: { user: s.smtpUser, pass: s.smtpPass },
+    auth: { user: s.smtpUser.trim(), pass: s.smtpPass.replace(/\s+/g, "") }, // Gmail shows app passwords with spaces
+    connectionTimeout: 20_000,
+    greetingTimeout: 20_000,
+    socketTimeout: 60_000,
   });
 }
 

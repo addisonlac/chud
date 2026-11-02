@@ -488,18 +488,38 @@ async function renderSettings() {
   loadDnc();
   $("#dnc-btn").addEventListener("click", async () => { try { await api("/api/suppression", { method: "POST", body: { email: $("#dnc-add").value } }); $("#dnc-add").value = ""; loadDnc(); } catch (e) { toast(e.message, "error"); } });
 
-  $("#sform").addEventListener("submit", async (e) => {
-    e.preventDefault();
+  const saveForm = async () => {
+    const form = $("#sform");
     const body = {};
     for (const d of defs) {
-      const el = e.target.elements[d.key];
+      const el = form.elements[d.key];
       if (el) body[d.key] = d.type === "bool" ? String(el.checked) : el.value;
     }
-    try { await api("/api/settings", { method: "PUT", body }); toast("Settings saved"); refreshStatus(); } catch (err) { toast(err.message, "error"); }
+    await api("/api/settings", { method: "PUT", body });
+    refreshStatus();
+  };
+  $("#sform").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try { await saveForm(); toast("Settings saved"); } catch (err) { toast(err.message, "error"); }
   });
-  $("#test-email").addEventListener("click", async () => {
-    try { const r = await api("/api/test-email", { method: "POST", body: $("#test-to").value ? { to: $("#test-to").value } : {} }); toast(r.note); }
-    catch (e) { toast(`Test failed: ${e.message} — save settings first if you just changed them`, "error"); }
+  $("#test-email").addEventListener("click", async (ev) => {
+    const btn = ev.target;
+    btn.disabled = true; btn.textContent = "Sending…";
+    try {
+      await saveForm(); // test exactly what's on screen — no separate Save needed
+      const r = await api("/api/test-email", { method: "POST", body: $("#test-to").value ? { to: $("#test-to").value } : {} });
+      toast(`✓ ${r.note} — check your inbox`);
+    } catch (e) {
+      const m = e.message;
+      const hint = /Fill in SMTP/.test(m)
+        ? "Fill in SMTP username (your email address) and SMTP password (a Gmail App Password)."
+        : /535|Invalid login|Username and Password not accepted|EAUTH/i.test(m)
+          ? "Login rejected. For Gmail use a 16-letter App Password (myaccount.google.com/apppasswords), not your normal password."
+          : /ETIMEDOUT|ECONNREFUSED|ENOTFOUND|ESOCKET/i.test(m)
+            ? "Couldn't reach the mail server. Check SMTP host/port (Gmail: smtp.gmail.com, 465, SSL on) and your internet connection."
+            : m;
+      toast(`Test failed: ${hint}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Send test email"; }
   });
 }
 
