@@ -1,0 +1,9 @@
+services:
+  outreach:
+    build: .
+    restart: always # comes back after crashes and server reboots
+    ports:
+      - "3000:3000"
+    env_file: .env # must contain APP_PASSWORD (the app is reachable from the network)
+    volumes:
+      - ./data:/app/data # leads, drafts and settings survive restarts/upgrades

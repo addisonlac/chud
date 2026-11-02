@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Outreach Agent</title>
+  <meta name="description" content="Finds businesses with weak websites, ads and Shopify stores, and writes the outreach for you to approve." />
+  <meta name="theme-color" content="#4f46e5" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><img src="/icon.svg" alt="" /> Outreach Agent</div>
+      <button class="nav-item" data-view="dashboard">🏠 Dashboard</button>
+      <div class="nav-label">Ready to approve</div>
+      <button class="nav-item" data-view="queue/website"><span class="dot website"></span> Website <span class="count" id="count-website">0</span></button>
+      <button class="nav-item" data-view="queue/ads"><span class="dot ads"></span> Ad Management <span class="count" id="count-ads">0</span></button>
+      <button class="nav-item" data-view="queue/cro"><span class="dot cro"></span> Shopify CRO <span class="count" id="count-cro">0</span></button>
+      <div class="nav-label">Pipeline</div>
+      <button class="nav-item" data-view="sent">📤 Sent &amp; scheduled</button>
+      <button class="nav-item" data-view="leads">🗂️ All leads</button>
+      <button class="nav-item" data-view="settings">⚙️ Settings</button>
+      <div class="sidebar-foot" id="sidebar-foot"></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="btn ghost menu-btn" id="menu-btn" aria-label="Menu">☰</button>
+        <h1 id="title">Dashboard</h1>
+        <div class="spacer"></div>
+        <span class="pill" id="agent-pill"><span class="pulse"></span><span id="agent-text">Loading…</span></span>
+        <button class="btn" id="agent-toggle">Start</button>
+      </header>
+      <section class="content" id="view"></section>
+    </main>
+  </div>
+  <div class="toasts" id="toasts"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

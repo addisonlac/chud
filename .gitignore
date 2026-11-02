@@ -3,6 +3,8 @@ dist/
 .env
 *.log
 data/*.json
+data/*.db
+data/*.db-*
 !data/.gitkeep
 .DS_Store
 coverage/
