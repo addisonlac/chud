@@ -1,0 +1,23 @@
+# One-click hosting on Render (https://render.com) — gives the app a permanent
+# https://<name>.onrender.com address and keeps it running 24/7.
+# Render → New → Blueprint → pick this repo/branch → enter the values it asks for.
+services:
+  - type: web
+    name: outreach-agent
+    runtime: docker
+    plan: starter # the persistent disk (your leads/settings) needs a paid instance
+    healthCheckPath: /health
+    autoDeploy: true
+    disk:
+      name: outreach-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: APP_PASSWORD # the password you'll log in with — Render asks for it on deploy
+        sync: false
+      - key: GROQ_API_KEY # optional here — can also be pasted in the app's Settings page
+        sync: false
+      - key: HOST
+        value: 0.0.0.0
+      - key: TZ # emails only go out 8am–6pm Mon–Fri in this time zone
+        value: America/New_York

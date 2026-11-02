@@ -146,7 +146,9 @@ export class SettingsStore {
     );
     const out: Record<string, string> = {};
     for (const def of SETTING_DEFS) {
-      out[def.key] = saved[def.key] ?? process.env[def.env] ?? def.default;
+      // On Render, the public URL is known automatically (used for links in alerts).
+      const platformDefault = def.key === "appUrl" ? process.env.RENDER_EXTERNAL_URL : undefined;
+      out[def.key] = saved[def.key] ?? process.env[def.env] ?? platformDefault ?? def.default;
     }
     return out;
   }

@@ -43,7 +43,18 @@ Then press **▶ Start agent**. It keeps running and picks up where it left off 
 4. Leads with no email but an active Facebook/Instagram page get a **DM version**. Copy it, send it from their page, then press **Mark as sent**.
 5. **Sent & scheduled** shows everything that went out. **All leads** lets you search, add one by hand, or **import a CSV** (`name, website, email, facebook, niche`).
 
-## Run it 24/7
+## Put it online (your own website link)
+
+The easiest option is **Render**. It gives you a permanent `https://outreach-agent-xxxx.onrender.com` address that works from any computer or phone and runs 24/7.
+
+1. Sign up at [render.com](https://render.com) and connect your GitHub.
+2. Go to [dashboard.render.com/blueprint/new](https://dashboard.render.com/blueprint/new), pick this repo and branch, and click **Apply**.
+3. When it asks, enter an **APP_PASSWORD** (what you'll log in with). You can paste a Groq key now or later in Settings.
+4. When the deploy finishes, open the `.onrender.com` link. Log in with any username plus your password, then fill in Settings.
+
+Cost: Render's Starter instance plus a 1 GB disk (about $7–8/month). The disk is what keeps your leads and settings between restarts, which the free tier can't do. Change `TZ` in Render's Environment tab if you're not on US Eastern time; it controls when emails go out.
+
+## Run it 24/7 on your own server
 
 A laptop that sleeps stops the agent, so for true 24/7 put it on any small server (a $5/month VPS is plenty).
 
